@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ENBIC Tracking System</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ENBIC Local Tracking System</h1>
+            <div class="header-actions">
+                <button id="generateRemindersBtn" class="btn btn-secondary">Generate Reminders</button>
+                <button id="refreshBtn" class="btn btn-secondary">Refresh</button>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+            <button class="tab-btn" data-tab="arns">ARN Management</button>
+            <button class="tab-btn" data-tab="delivery">Delivery</button>
+            <button class="tab-btn" data-tab="reports">Reports</button>
+        </nav>
+
+        <!-- Dashboard Tab -->
+        <div id="dashboard" class="tab-content active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>Awaiting Capture</h3>
+                    <div class="stat-value" id="stat-awaiting">0</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Submitted</h3>
+                    <div class="stat-value" id="stat-submitted">0</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Pending Delivery</h3>
+                    <div class="stat-value" id="stat-pending">0</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Delivered</h3>
+                    <div class="stat-value" id="stat-delivered">0</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Active Reminders</h2>
+                <div id="remindersList" class="reminders-list"></div>
+            </div>
+
+            <div class="section">
+                <h2>Delivery Status by State</h2>
+                <div id="deliveryStats" class="delivery-stats"></div>
+            </div>
+        </div>
+
+        <!-- ARN Management Tab -->
+        <div id="arns" class="tab-content">
+            <div class="section">
+                <h2>Add New ARN</h2>
+                <form id="addArnForm" class="form-inline">
+                    <input type="text" id="arnInput" placeholder="Paste ARN here" required>
+                    <select id="stateSelect" required>
+                        <option value="">Select State</option>
+                        <option value="Andhra Pradesh">Andhra Pradesh</option>
+                        <option value="Arunachal Pradesh">Arunachal Pradesh</option>
+                        <option value="Assam">Assam</option>
+                        <option value="Bihar">Bihar</option>
+                        <option value="Chhattisgarh">Chhattisgarh</option>
+                        <option value="Goa">Goa</option>
+                        <option value="Gujarat">Gujarat</option>
+                        <option value="Haryana">Haryana</option>
+                        <option value="Himachal Pradesh">Himachal Pradesh</option>
+                        <option value="Jharkhand">Jharkhand</option>
+                        <option value="Karnataka">Karnataka</option>
+                        <option value="Kerala">Kerala</option>
+                        <option value="Madhya Pradesh">Madhya Pradesh</option>
+                        <option value="Maharashtra">Maharashtra</option>
+                        <option value="Manipur">Manipur</option>
+                        <option value="Meghalaya">Meghalaya</option>
+                        <option value="Mizoram">Mizoram</option>
+                        <option value="Nagaland">Nagaland</option>
+                        <option value="Odisha">Odisha</option>
+                        <option value="Punjab">Punjab</option>
+                        <option value="Rajasthan">Rajasthan</option>
+                        <option value="Sikkim">Sikkim</option>
+                        <option value="Tamil Nadu">Tamil Nadu</option>
+                        <option value="Telangana">Telangana</option>
+                        <option value="Tripura">Tripura</option>
+                        <option value="Uttar Pradesh">Uttar Pradesh</option>
+                        <option value="Uttarakhand">Uttarakhand</option>
+                        <option value="West Bengal">West Bengal</option>
+                        <option value="Andaman and Nicobar Islands">Andaman and Nicobar Islands</option>
+                        <option value="Chandigarh">Chandigarh</option>
+                        <option value="Dadra and Nagar Haveli and Daman and Diu">Dadra and Nagar Haveli and Daman and Diu</option>
+                        <option value="Delhi">Delhi</option>
+                        <option value="Jammu and Kashmir">Jammu and Kashmir</option>
+                        <option value="Ladakh">Ladakh</option>
+                        <option value="Lakshadweep">Lakshadweep</option>
+                        <option value="Puducherry">Puducherry</option>
+                    </select>
+                    <button type="submit" class="btn btn-primary">Add ARN</button>
+                </form>
+            </div>
+
+            <div class="section">
+                <h2>ARN List</h2>
+                <div class="filters">
+                    <input type="text" id="searchInput" placeholder="Search by ARN..." class="filter-input">
+                    <select id="filterState" class="filter-select">
+                        <option value="">All States</option>
+                    </select>
+                    <select id="filterStatus" class="filter-select">
+                        <option value="">All Statuses</option>
+                        <option value="Awaiting Capture">Awaiting Capture</option>
+                        <option value="Submitted to Personalization">Submitted to Personalization</option>
+                        <option value="Pending Delivery">Pending Delivery</option>
+                        <option value="Delivered">Delivered</option>
+                    </select>
+                </div>
+                <div id="arnsList" class="arns-list"></div>
+            </div>
+        </div>
+
+        <!-- Delivery Tab -->
+        <div id="delivery" class="tab-content">
+            <div class="section">
+                <h2>State Delivery Confirmation</h2>
+                <p class="info-text">Select a state and confirm delivery. This will mark all pending ARNs for that state as delivered.</p>
+                <form id="deliveryForm" class="form-inline">
+                    <select id="deliveryStateSelect" required>
+                        <option value="">Select State</option>
+                    </select>
+                    <textarea id="deliveryNotes" placeholder="Optional notes..." rows="2"></textarea>
+                    <button type="submit" class="btn btn-primary">Confirm Delivery</button>
+                </form>
+            </div>
+
+            <div class="section">
+                <h2>Pending Deliveries by State</h2>
+                <div id="pendingDeliveries" class="pending-deliveries"></div>
+            </div>
+
+            <div class="section">
+                <h2>Delivery History</h2>
+                <div id="deliveryHistory" class="delivery-history"></div>
+            </div>
+        </div>
+
+        <!-- Reports Tab -->
+        <div id="reports" class="tab-content">
+            <div class="section">
+                <h2>Reports</h2>
+                <div class="reports-grid">
+                    <div class="report-card">
+                        <h3>Pending Capture (Aging)</h3>
+                        <p>ARNs awaiting capture and personalization submission</p>
+                        <div class="report-actions">
+                            <button class="btn btn-secondary" onclick="viewReport('pending-capture')">View</button>
+                            <button class="btn btn-secondary" onclick="exportReport('pending-capture', 'excel')">Excel</button>
+                            <button class="btn btn-secondary" onclick="exportReport('pending-capture', 'pdf')">PDF</button>
+                        </div>
+                    </div>
+                    <div class="report-card">
+                        <h3>Submitted to Personalization</h3>
+                        <p>ARNs submitted for personalization</p>
+                        <div class="report-actions">
+                            <button class="btn btn-secondary" onclick="viewReport('submitted')">View</button>
+                            <button class="btn btn-secondary" onclick="exportReport('submitted', 'excel')">Excel</button>
+                            <button class="btn btn-secondary" onclick="exportReport('submitted', 'pdf')">PDF</button>
+                        </div>
+                    </div>
+                    <div class="report-card">
+                        <h3>Pending Delivery</h3>
+                        <p>ARNs pending delivery by state</p>
+                        <div class="report-actions">
+                            <button class="btn btn-secondary" onclick="viewReport('pending-delivery')">View</button>
+                            <button class="btn btn-secondary" onclick="exportReport('pending-delivery', 'excel')">Excel</button>
+                            <button class="btn btn-secondary" onclick="exportReport('pending-delivery', 'pdf')">PDF</button>
+                        </div>
+                    </div>
+                    <div class="report-card">
+                        <h3>Delivery History</h3>
+                        <p>Historical delivery records</p>
+                        <div class="report-actions">
+                            <button class="btn btn-secondary" onclick="viewReport('delivery-history')">View</button>
+                            <button class="btn btn-secondary" onclick="exportReport('delivery-history', 'excel')">Excel</button>
+                            <button class="btn btn-secondary" onclick="exportReport('delivery-history', 'pdf')">PDF</button>
+                        </div>
+                    </div>
+                    <div class="report-card">
+                        <h3>Activity Log</h3>
+                        <p>Operator activity and audit trail</p>
+                        <div class="report-actions">
+                            <button class="btn btn-secondary" onclick="viewReport('activity-log')">View</button>
+                            <button class="btn btn-secondary" onclick="exportReport('activity-log', 'excel')">Excel</button>
+                            <button class="btn btn-secondary" onclick="exportReport('activity-log', 'pdf')">PDF</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section" id="reportView" style="display: none;">
+                <h2 id="reportTitle"></h2>
+                <div id="reportContent" class="report-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Status Update Modal -->
+    <div id="statusModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Update Status</h2>
+            <p>ARN: <strong id="modalArn"></strong></p>
+            <p>Current Status: <strong id="modalCurrentStatus"></strong></p>
+            <select id="modalNewStatus" class="form-select"></select>
+            <button id="confirmStatusBtn" class="btn btn-primary">Confirm Update</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
