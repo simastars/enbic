@@ -33,12 +33,25 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   } else {
     console.log('Connected to SQLite database');
     initializeDatabase();
+    // Generate reminders immediately on startup and schedule daily generation
+    generateRemindersInDB((err) => {
+      if (err) console.error('Error generating reminders on startup:', err);
+      else console.log('Initial reminders generated');
+    });
+    setInterval(() => generateRemindersInDB(), 24 * 60 * 60 * 1000);
   }
 });
 
 // Initialize database schema
 function initializeDatabase() {
   db.serialize(() => {
+    // States table
+    db.run(`CREATE TABLE IF NOT EXISTS states (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
     // ARNs table
     db.run(`CREATE TABLE IF NOT EXISTS arns (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +63,8 @@ function initializeDatabase() {
       submitted_at DATETIME,
       pending_delivery_at DATETIME,
       delivered_at DATETIME,
-      notes TEXT
+      notes TEXT,
+      FOREIGN KEY (state) REFERENCES states(name)
     )`);
 
     // Delivery history table
@@ -85,6 +99,92 @@ function initializeDatabase() {
     )`);
 
     console.log('Database initialized');
+  });
+}
+
+// Generate reminders logic extracted so it can be triggered automatically
+function generateRemindersInDB(cb) {
+  // Reminders for ARNs awaiting submission
+  db.all(`SELECT arn FROM arns WHERE status = 'Awaiting Capture'`, [], (err, rows) => {
+    if (err) {
+      if (cb) return cb(err);
+      return;
+    }
+
+    const tasks = [];
+
+    rows.forEach(row => {
+      tasks.push(new Promise((resolve) => {
+        db.get(`SELECT id FROM reminders WHERE arn = ? AND reminder_type = 'pending_capture' AND resolved_at IS NULL`, [row.arn], (err2, existing) => {
+          if (!err2 && !existing) {
+            db.run(`INSERT INTO reminders (arn, reminder_type, message) VALUES (?, ?, ?)`, [row.arn, 'pending_capture', `ARN ${row.arn} is still awaiting capture and personalization submission`], () => resolve());
+          } else {
+            resolve();
+          }
+        });
+      }));
+    });
+
+    // After pending-capture reminders, add personalization reminders and state thresholds
+    Promise.all(tasks).then(() => {
+      db.all(`SELECT arn FROM arns WHERE status = 'Submitted to Personalization'`, [], (err3, rows2) => {
+        if (!err3 && rows2 && rows2.length > 0) {
+          const tasks2 = rows2.map(r2 => new Promise((resolve) => {
+            db.get(`SELECT id FROM reminders WHERE arn = ? AND reminder_type = 'pending_personalization' AND resolved_at IS NULL`, [r2.arn], (err4, existing2) => {
+              if (!err4 && !existing2) {
+                db.run(`INSERT INTO reminders (arn, reminder_type, message) VALUES (?, ?, ?)`, [r2.arn, 'pending_personalization', `ARN ${r2.arn} has been submitted to personalization — move to pending delivery`], () => resolve());
+              } else {
+                resolve();
+              }
+            });
+          }));
+
+          Promise.all(tasks2).then(() => {
+            // State-level reminders for states with >=3 pending deliveries
+            db.all(`SELECT state, COUNT(*) as cnt, MIN(arn) as sample_arn FROM arns WHERE status = 'Pending Delivery' GROUP BY state HAVING cnt >= 3`, [], (err5, rows3) => {
+              if (!err5 && rows3 && rows3.length > 0) {
+                const tasks3 = rows3.map(r3 => new Promise((resolve) => {
+                  db.get(`SELECT id FROM reminders WHERE reminder_type = 'state_delivery_threshold' AND message LIKE ? AND resolved_at IS NULL`, [`%${r3.state}%`], (err6, existing3) => {
+                    if (!err6 && !existing3) {
+                      const sampleArn = r3.sample_arn || '';
+                      const msg = `State ${r3.state} has ${r3.cnt} pending cards — consider scheduling delivery`;
+                      db.run(`INSERT INTO reminders (arn, reminder_type, message) VALUES (?, ?, ?)`, [sampleArn, 'state_delivery_threshold', msg], () => resolve());
+                    } else {
+                      resolve();
+                    }
+                  });
+                }));
+
+                Promise.all(tasks3).then(() => cb ? cb(null) : null);
+              } else {
+                if (cb) cb(null);
+              }
+            });
+          });
+        } else {
+          // Even if no personalization rows, still check state-level reminders
+          db.all(`SELECT state, COUNT(*) as cnt, MIN(arn) as sample_arn FROM arns WHERE status = 'Pending Delivery' GROUP BY state HAVING cnt >= 3`, [], (err5, rows3) => {
+            if (!err5 && rows3 && rows3.length > 0) {
+              const tasks3 = rows3.map(r3 => new Promise((resolve) => {
+                db.get(`SELECT id FROM reminders WHERE reminder_type = 'state_delivery_threshold' AND message LIKE ? AND resolved_at IS NULL`, [`%${r3.state}%`], (err6, existing3) => {
+                  if (!err6 && !existing3) {
+                    const sampleArn = r3.sample_arn || '';
+                    const msg = `State ${r3.state} has ${r3.cnt} pending cards — consider scheduling delivery`;
+                    db.run(`INSERT INTO reminders (arn, reminder_type, message) VALUES (?, ?, ?)`, [sampleArn, 'state_delivery_threshold', msg], () => resolve());
+                  } else {
+                    resolve();
+                  }
+                });
+              }));
+
+              Promise.all(tasks3).then(() => cb ? cb(null) : null);
+            } else {
+              if (cb) cb(null);
+            }
+          });
+        }
+      });
+    });
   });
 }
 
@@ -203,6 +303,12 @@ app.post('/api/arns', (req, res) => {
         } else {
           logAudit(arn, 'ARN_CREATED', null, `State: ${state}`);
           res.json({ id: this.lastID, arn, state, status: 'Awaiting Capture' });
+          // Trigger reminders generation for the newly added ARN (non-blocking)
+          try {
+            generateRemindersInDB();
+          } catch (e) {
+            console.error('Error triggering reminders after ARN creation:', e);
+          }
         }
       }
     );
@@ -253,6 +359,12 @@ app.put('/api/arns/:arn/status', (req, res) => {
         } else {
           logAudit(arn, 'STATUS_UPDATED', row.status, status);
           res.json({ success: true });
+          // Refresh reminders after status change (non-blocking)
+          try {
+            generateRemindersInDB();
+          } catch (e) {
+            console.error('Error triggering reminders after status update:', e);
+          }
         }
       }
     );
@@ -334,48 +446,72 @@ app.get('/api/reminders', (req, res) => {
 
 // Generate reminders (should be called daily)
 app.post('/api/reminders/generate', (req, res) => {
-  // Reminders for ARNs awaiting submission
-  db.all(
-    `SELECT arn FROM arns WHERE status = 'Awaiting Capture'`,
-    [],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-
-      rows.forEach(row => {
-        db.get(
-          `SELECT id FROM reminders WHERE arn = ? AND reminder_type = 'pending_capture' AND resolved_at IS NULL`,
-          [row.arn],
-          (err, existing) => {
-            if (!err && !existing) {
-              db.run(
-                `INSERT INTO reminders (arn, reminder_type, message) VALUES (?, ?, ?)`,
-                [row.arn, 'pending_capture', `ARN ${row.arn} is still awaiting capture and personalization submission`]
-              );
-            }
-          }
-        );
-      });
-
-      res.json({ success: true, message: 'Reminders generated' });
-    }
-  );
+  generateRemindersInDB((err) => {
+    if (err) return res.status(500).json({ error: err.message || String(err) });
+    res.json({ success: true, message: 'Reminders generated' });
+  });
 });
 
 // Resolve reminder
 app.post('/api/reminders/:id/resolve', (req, res) => {
-  db.run(
-    `UPDATE reminders SET resolved_at = CURRENT_TIMESTAMP WHERE id = ?`,
-    [req.params.id],
-    function(err) {
-      if (err) {
-        res.status(500).json({ error: err.message });
-      } else {
+  const reminderId = req.params.id;
+  db.get(`SELECT * FROM reminders WHERE id = ?`, [reminderId], (err, reminder) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!reminder) return res.status(404).json({ error: 'Reminder not found' });
+
+    const advanceMap = {
+      'pending_capture': 'Submitted to Personalization',
+      'pending_personalization': 'Pending Delivery'
+    };
+
+    const newStatus = advanceMap[reminder.reminder_type];
+
+    const finalize = (err2) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      // Mark reminder resolved
+      db.run(`UPDATE reminders SET resolved_at = CURRENT_TIMESTAMP WHERE id = ?`, [reminderId], function(err3) {
+        if (err3) return res.status(500).json({ error: err3.message });
         res.json({ success: true });
-      }
+      });
+    };
+
+    if (!newStatus || !reminder.arn) {
+      // Nothing to advance for this reminder type or no associated ARN
+      return finalize(null);
     }
-  );
+
+    // Try to advance ARN status
+    db.get(`SELECT * FROM arns WHERE arn = ?`, [reminder.arn], (err4, arnRow) => {
+      if (err4) return res.status(500).json({ error: err4.message });
+      if (!arnRow) {
+        // ARN not found, just resolve reminder
+        return finalize(null);
+      }
+
+      if (!isValidStatusTransition(arnRow.status, newStatus)) {
+        // Invalid transition; still resolve reminder but inform via log
+        console.warn(`Invalid status transition for ARN ${reminder.arn}: ${arnRow.status} -> ${newStatus}`);
+        return finalize(null);
+      }
+
+      const timestampField = {
+        'Submitted to Personalization': 'submitted_at',
+        'Pending Delivery': 'pending_delivery_at',
+        'Delivered': 'delivered_at'
+      };
+
+      const updateFields = ['status = ?'];
+      if (timestampField[newStatus]) updateFields.push(`${timestampField[newStatus]} = CURRENT_TIMESTAMP`);
+
+      db.run(`UPDATE arns SET ${updateFields.join(', ')} WHERE arn = ?`, [newStatus, reminder.arn], function(err5) {
+        if (err5) return res.status(500).json({ error: err5.message });
+        logAudit(reminder.arn, 'STATUS_UPDATED_VIA_REMINDER', arnRow.status, newStatus);
+        // regenerate reminders asynchronously
+        try { generateRemindersInDB(); } catch (e) { console.error('Error regenerating reminders:', e); }
+        return finalize(null);
+      });
+    });
+  });
 });
 
 // Get delivery statistics by state
@@ -406,33 +542,56 @@ app.get('/api/delivery/stats', (req, res) => {
 // Get reports data
 app.get('/api/reports/:type', (req, res) => {
   const { type } = req.params;
+  const { search, state, date_from, date_to, page = 1, page_size = 50 } = req.query;
   let query = '';
+  let params = [];
+  const limit = Math.min(Number(page_size) || 50, 1000);
+  const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
 
   switch (type) {
     case 'pending-capture':
-      query = `SELECT *, 
-        julianday('now') - julianday(created_at) as age_days
-        FROM arns WHERE status = 'Awaiting Capture' ORDER BY created_at ASC`;
+      query = `SELECT *, julianday('now') - julianday(created_at) as age_days FROM arns WHERE status = 'Awaiting Capture'`;
+      if (search) { query += ' AND arn LIKE ?'; params.push(`%${search}%`); }
+      if (state) { query += ' AND state = ?'; params.push(state); }
+      if (date_from) { query += ' AND date(created_at) >= date(?)'; params.push(date_from); }
+      if (date_to) { query += ' AND date(created_at) <= date(?)'; params.push(date_to); }
+      query += ` ORDER BY created_at ASC LIMIT ${limit} OFFSET ${offset}`;
       break;
     case 'submitted':
-      query = `SELECT * FROM arns WHERE status = 'Submitted to Personalization' ORDER BY submitted_at DESC`;
+      query = `SELECT * FROM arns WHERE status = 'Submitted to Personalization'`;
+      if (search) { query += ' AND arn LIKE ?'; params.push(`%${search}%`); }
+      if (state) { query += ' AND state = ?'; params.push(state); }
+      if (date_from) { query += ' AND date(submitted_at) >= date(?)'; params.push(date_from); }
+      if (date_to) { query += ' AND date(submitted_at) <= date(?)'; params.push(date_to); }
+      query += ` ORDER BY submitted_at DESC LIMIT ${limit} OFFSET ${offset}`;
       break;
     case 'pending-delivery':
-      query = `SELECT *, 
-        julianday('now') - julianday(pending_delivery_at) as age_days
-        FROM arns WHERE status = 'Pending Delivery' ORDER BY state, pending_delivery_at ASC`;
+      query = `SELECT *, julianday('now') - julianday(pending_delivery_at) as age_days FROM arns WHERE status = 'Pending Delivery'`;
+      if (search) { query += ' AND arn LIKE ?'; params.push(`%${search}%`); }
+      if (state) { query += ' AND state = ?'; params.push(state); }
+      if (date_from) { query += ' AND date(pending_delivery_at) >= date(?)'; params.push(date_from); }
+      if (date_to) { query += ' AND date(pending_delivery_at) <= date(?)'; params.push(date_to); }
+      query += ` ORDER BY state, pending_delivery_at ASC LIMIT ${limit} OFFSET ${offset}`;
       break;
     case 'delivery-history':
-      query = `SELECT * FROM delivery_history ORDER BY delivery_date DESC`;
+      query = `SELECT * FROM delivery_history WHERE 1=1`;
+      if (state) { query += ' AND state = ?'; params.push(state); }
+      if (date_from) { query += ' AND date(delivery_date) >= date(?)'; params.push(date_from); }
+      if (date_to) { query += ' AND date(delivery_date) <= date(?)'; params.push(date_to); }
+      query += ` ORDER BY delivery_date DESC LIMIT ${limit} OFFSET ${offset}`;
       break;
     case 'activity-log':
-      query = `SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 1000`;
+      query = `SELECT * FROM audit_log WHERE 1=1`;
+      if (search) { query += ' AND (arn LIKE ? OR action LIKE ? OR old_value LIKE ? OR new_value LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`); }
+      if (date_from) { query += ' AND date(timestamp) >= date(?)'; params.push(date_from); }
+      if (date_to) { query += ' AND date(timestamp) <= date(?)'; params.push(date_to); }
+      query += ` ORDER BY timestamp DESC LIMIT ${limit} OFFSET ${offset}`;
       break;
     default:
       return res.status(400).json({ error: 'Invalid report type' });
   }
 
-  db.all(query, [], (err, rows) => {
+  db.all(query, params, (err, rows) => {
     if (err) {
       res.status(500).json({ error: err.message });
     } else {
@@ -527,12 +686,75 @@ app.get('/api/export/pdf/:type', (req, res) => {
 
 // Get states list
 app.get('/api/states', (req, res) => {
-  db.all('SELECT DISTINCT state FROM arns ORDER BY state', [], (err, rows) => {
+  db.all('SELECT * FROM states ORDER BY name', [], (err, rows) => {
     if (err) {
       res.status(500).json({ error: err.message });
     } else {
-      res.json(rows.map(r => r.state));
+      res.json(rows);
     }
+  });
+});
+
+// Add new state
+app.post('/api/states', (req, res) => {
+  const { name } = req.body;
+
+  if (!name || typeof name !== 'string' || name.trim() === '') {
+    return res.status(400).json({ error: 'State name is required' });
+  }
+
+  const stateName = name.trim();
+
+  db.run(
+    `INSERT INTO states (name) VALUES (?)`,
+    [stateName],
+    function(err) {
+      if (err) {
+        if (err.message.includes('UNIQUE')) {
+          res.status(409).json({ error: 'State already exists' });
+        } else {
+          res.status(500).json({ error: err.message });
+        }
+      } else {
+        logAudit(null, 'STATE_CREATED', null, `State: ${stateName}`);
+        res.json({ id: this.lastID, name: stateName });
+      }
+    }
+  );
+});
+
+// Delete state
+app.delete('/api/states/:id', (req, res) => {
+  const { id } = req.params;
+
+  db.get('SELECT name FROM states WHERE id = ?', [id], (err, state) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    if (!state) {
+      return res.status(404).json({ error: 'State not found' });
+    }
+
+    db.get('SELECT COUNT(*) as count FROM arns WHERE state = ?', [state.name], (err, row) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+
+      if (row.count > 0) {
+        return res.status(400).json({ 
+          error: `Cannot delete state "${state.name}" - it has ${row.count} associated ARN(s)` 
+        });
+      }
+
+      db.run('DELETE FROM states WHERE id = ?', [id], function(err) {
+        if (err) {
+          res.status(500).json({ error: err.message });
+        } else {
+          logAudit(null, 'STATE_DELETED', state.name, null);
+          res.json({ success: true, message: `State "${state.name}" deleted` });
+        }
+      });
+    });
   });
 });
 

@@ -39,112 +39,170 @@ function switchTab(tabName) {
         loadARNs();
     } else if (tabName === 'delivery') {
         loadDeliveryTab();
+    } else if (tabName === 'states') {
+        loadStatesList();
     }
 }
 
 function setupEventListeners() {
     // Add ARN form
-    document.getElementById('addArnForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const arn = document.getElementById('arnInput').value.trim();
-        const state = document.getElementById('stateSelect').value;
+    const addArnForm = document.getElementById('addArnForm');
+    if (addArnForm) {
+        addArnForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const arn = document.getElementById('arnInput').value.trim();
+            const state = document.getElementById('stateSelect').value;
 
-        if (!arn || !state) {
-            showAlert('Please provide both ARN and State', 'error');
-            return;
-        }
-
-        try {
-            const response = await fetch(`${API_BASE}/arns`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ arn, state })
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-                showAlert('ARN added successfully', 'success');
-                document.getElementById('arnInput').value = '';
-                document.getElementById('stateSelect').value = '';
-                loadARNs();
-                loadDashboardStats();
-            } else {
-                showAlert(data.error || 'Failed to add ARN', 'error');
+            if (!arn || !state) {
+                showAlert('Please provide both ARN and State', 'error');
+                return;
             }
-        } catch (error) {
-            showAlert('Error connecting to server', 'error');
-        }
-    });
+
+            try {
+                const response = await fetch(`${API_BASE}/arns`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ arn, state })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showAlert('ARN added successfully', 'success');
+                    document.getElementById('arnInput').value = '';
+                    document.getElementById('stateSelect').value = '';
+                    await Promise.all([loadARNs(), loadDashboardStats(), loadReminders()]);
+                } else {
+                    showAlert(data.error || 'Failed to add ARN', 'error');
+                }
+            } catch (error) {
+                showAlert('Error connecting to server', 'error');
+            }
+        });
+    }
 
     // Search and filters
-    document.getElementById('searchInput').addEventListener('input', loadARNs);
-    document.getElementById('filterState').addEventListener('change', loadARNs);
-    document.getElementById('filterStatus').addEventListener('change', loadARNs);
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) searchInput.addEventListener('input', loadARNs);
+    
+    const filterState = document.getElementById('filterState');
+    if (filterState) filterState.addEventListener('change', loadARNs);
+    
+    const filterStatus = document.getElementById('filterStatus');
+    if (filterStatus) filterStatus.addEventListener('change', loadARNs);
 
     // Refresh button
-    document.getElementById('refreshBtn').addEventListener('click', () => {
-        loadInitialData();
-        showAlert('Data refreshed', 'success');
-    });
+    const refreshBtn = document.getElementById('refreshBtn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => {
+            loadInitialData();
+            showAlert('Data refreshed', 'success');
+        });
+    }
 
     // Generate reminders
-    document.getElementById('generateRemindersBtn').addEventListener('click', async () => {
-        try {
-            const response = await fetch(`${API_BASE}/reminders/generate`, {
-                method: 'POST'
-            });
-            const data = await response.json();
-            if (response.ok) {
-                showAlert('Reminders generated', 'success');
-                loadDashboard();
+    const generateRemindersBtn = document.getElementById('generateRemindersBtn');
+    if (generateRemindersBtn) {
+        generateRemindersBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch(`${API_BASE}/reminders/generate`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showAlert('Reminders generated', 'success');
+                    loadDashboard();
+                } else {
+                    showAlert(data.error || 'Failed to generate reminders', 'error');
+                }
+            } catch (error) {
+                showAlert('Error generating reminders', 'error');
             }
-        } catch (error) {
-            showAlert('Error generating reminders', 'error');
-        }
-    });
+        });
+    }
 
     // Delivery form
-    document.getElementById('deliveryForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const state = document.getElementById('deliveryStateSelect').value;
-        const notes = document.getElementById('deliveryNotes').value;
+    const deliveryForm = document.getElementById('deliveryForm');
+    if (deliveryForm) {
+        deliveryForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const state = document.getElementById('deliveryStateSelect').value;
+            const notes = document.getElementById('deliveryNotes').value;
 
-        if (!state) {
-            showAlert('Please select a state', 'error');
-            return;
-        }
-
-        if (!confirm(`Confirm delivery for ${state}? This will mark all pending ARNs as delivered.`)) {
-            return;
-        }
-
-        try {
-            const response = await fetch(`${API_BASE}/delivery/confirm`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ state, notes })
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-                showAlert(`Delivery confirmed for ${state}. ${data.count} ARN(s) marked as delivered.`, 'success');
-                document.getElementById('deliveryNotes').value = '';
-                loadDeliveryTab();
-                loadDashboardStats();
-            } else {
-                showAlert(data.error || 'Failed to confirm delivery', 'error');
+            if (!state) {
+                showAlert('Please select a state', 'error');
+                return;
             }
-        } catch (error) {
-            showAlert('Error connecting to server', 'error');
-        }
-    });
+
+            if (!confirm(`Confirm delivery for ${state}? This will mark all pending ARNs as delivered.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/delivery/confirm`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ state, notes })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showAlert(`Delivery confirmed for ${state}. ${data.count} ARN(s) marked as delivered.`, 'success');
+                    document.getElementById('deliveryNotes').value = '';
+                    loadDeliveryTab();
+                    loadDashboardStats();
+                } else {
+                    showAlert(data.error || 'Failed to confirm delivery', 'error');
+                }
+            } catch (error) {
+                showAlert('Error connecting to server', 'error');
+            }
+        });
+    }
+
+    // Add State form
+    const addStateForm = document.getElementById('addStateForm');
+    if (addStateForm) {
+        addStateForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const stateName = document.getElementById('stateNameInput').value.trim();
+
+            if (!stateName) {
+                showAlert('Please enter a state name', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/states`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: stateName })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showAlert('State added successfully', 'success');
+                    document.getElementById('stateNameInput').value = '';
+                    loadStates();
+                    loadStatesList();
+                } else {
+                    showAlert(data.error || 'Failed to add state', 'error');
+                }
+            } catch (error) {
+                showAlert('Error connecting to server', 'error');
+            }
+        });
+    }
 
     // Modal close
-    document.querySelector('.close').addEventListener('click', () => {
-        document.getElementById('statusModal').style.display = 'none';
-    });
+    const closeBtn = document.querySelector('.close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            document.getElementById('statusModal').style.display = 'none';
+        });
+    }
 
     window.addEventListener('click', (e) => {
         const modal = document.getElementById('statusModal');
@@ -153,55 +211,63 @@ function setupEventListeners() {
         }
     });
 
+
     // Confirm status update
-    document.getElementById('confirmStatusBtn').addEventListener('click', async () => {
-        const newStatus = document.getElementById('modalNewStatus').value;
-        if (!newStatus) {
-            showAlert('Please select a status', 'error');
-            return;
-        }
-
-        try {
-            const response = await fetch(`${API_BASE}/arns/${currentArn}/status`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: newStatus })
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-                showAlert('Status updated successfully', 'success');
-                document.getElementById('statusModal').style.display = 'none';
-                loadARNs();
-                loadDashboardStats();
-            } else {
-                showAlert(data.error || 'Failed to update status', 'error');
+    const confirmStatusBtn = document.getElementById('confirmStatusBtn');
+    if (confirmStatusBtn) {
+        confirmStatusBtn.addEventListener('click', async () => {
+            const newStatus = document.getElementById('modalNewStatus').value;
+            if (!newStatus) {
+                showAlert('Please select a status', 'error');
+                return;
             }
-        } catch (error) {
-            showAlert('Error connecting to server', 'error');
-        }
-    });
+
+            try {
+                const response = await fetch(`${API_BASE}/arns/${currentArn}/status`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showAlert('Status updated successfully', 'success');
+                    document.getElementById('statusModal').style.display = 'none';
+                    loadARNs();
+                    loadDashboardStats();
+                } else {
+                    showAlert(data.error || 'Failed to update status', 'error');
+                }
+            } catch (error) {
+                showAlert('Error connecting to server', 'error');
+            }
+        });
+    }
 }
 
 async function loadInitialData() {
     await Promise.all([
         loadStates(),
-        loadDashboardStats()
+        loadDashboardStats(),
+        loadDashboard() // populate reminders and delivery stats on initial load
     ]);
 }
 
 async function loadStates() {
     try {
-        const response = await fetch(`${API_BASE}/arns`);
-        const arns = await response.json();
-        const uniqueStates = [...new Set(arns.map(a => a.state).filter(Boolean))].sort();
-        states = uniqueStates;
+        const response = await fetch(`${API_BASE}/states`);
+        if (!response.ok) throw new Error('Failed to load states');
+        
+        const statesData = await response.json();
+        states = statesData.map(s => typeof s === 'string' ? s : s.name).sort();
 
         // Populate state selects
         const selects = ['stateSelect', 'filterState', 'deliveryStateSelect'];
         selects.forEach(selectId => {
             const select = document.getElementById(selectId);
+            if (!select) return;
+            
             const currentValue = select.value;
             select.innerHTML = selectId === 'stateSelect' 
                 ? '<option value="">Select State</option>'
@@ -209,14 +275,14 @@ async function loadStates() {
                 ? '<option value="">All States</option>'
                 : '<option value="">Select State</option>';
 
-            uniqueStates.forEach(state => {
+            states.forEach(state => {
                 const option = document.createElement('option');
                 option.value = state;
                 option.textContent = state;
                 select.appendChild(option);
             });
 
-            if (currentValue && uniqueStates.includes(currentValue)) {
+            if (currentValue && states.includes(currentValue)) {
                 select.value = currentValue;
             }
         });
@@ -287,7 +353,7 @@ async function resolveReminder(id) {
         });
 
         if (response.ok) {
-            loadReminders();
+                await Promise.all([loadReminders(), loadARNs(), loadDashboardStats()]);
         }
     } catch (error) {
         showAlert('Error resolving reminder', 'error');
@@ -534,6 +600,166 @@ async function generateReminders() {
         await fetch(`${API_BASE}/reminders/generate`, { method: 'POST' });
     } catch (error) {
         console.error('Error generating reminders:', error);
+    }
+}
+
+async function loadStatesList() {
+    try {
+        const response = await fetch(`${API_BASE}/states`);
+        if (!response.ok) throw new Error('Failed to load states');
+        
+        const statesData = await response.json();
+        const statesList = document.getElementById('statesList');
+        
+        if (statesData.length === 0) {
+            statesList.innerHTML = '<p class="info-text">No states added yet.</p>';
+            return;
+        }
+        
+        let html = '<div class="states-table"><table><thead><tr><th>State Name</th><th>Created</th><th>Action</th></tr></thead><tbody>';
+        
+        statesData.forEach(state => {
+            const createdDate = state.created_at ? new Date(state.created_at).toLocaleDateString() : 'N/A';
+            html += `
+                <tr>
+                    <td>${state.name}</td>
+                    <td>${createdDate}</td>
+                    <td>
+                        <button class="btn btn-danger btn-sm" onclick="deleteState(${state.id}, '${state.name}')">Delete</button>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        html += '</tbody></table></div>';
+        statesList.innerHTML = html;
+    } catch (error) {
+        console.error('Error loading states list:', error);
+        showAlert('Failed to load states list', 'error');
+    }
+}
+
+// Reports: view and filtering
+let currentReportType = null;
+let currentReportPage = 1;
+
+function viewReport(type) {
+    currentReportType = type;
+    currentReportPage = 1;
+    document.getElementById('reportView').style.display = 'block';
+    document.getElementById('reportTitle').textContent = `Report: ${type.replace(/-/g, ' ').toUpperCase()}`;
+    // populate state filter
+    const stateSelect = document.getElementById('reportStateFilter');
+    stateSelect.innerHTML = '<option value="">All States</option>';
+    states.forEach(s => {
+        const opt = document.createElement('option'); opt.value = s; opt.textContent = s; stateSelect.appendChild(opt);
+    });
+
+    // wire buttons
+    document.getElementById('applyReportFilters').onclick = () => { currentReportPage = 1; loadReport(); };
+    document.getElementById('clearReportFilters').onclick = () => {
+        document.getElementById('reportSearch').value = '';
+        document.getElementById('reportStateFilter').value = '';
+        document.getElementById('reportDateFrom').value = '';
+        document.getElementById('reportDateTo').value = '';
+        document.getElementById('reportPageSize').value = '25';
+        currentReportPage = 1;
+        loadReport();
+    };
+
+    document.getElementById('exportReportExcel').onclick = () => exportReport(currentReportType, 'excel');
+    document.getElementById('exportReportPdf').onclick = () => exportReport(currentReportType, 'pdf');
+
+    loadReport();
+}
+
+async function loadReport() {
+    if (!currentReportType) return;
+    const search = document.getElementById('reportSearch').value;
+    const state = document.getElementById('reportStateFilter').value;
+    const dateFrom = document.getElementById('reportDateFrom').value;
+    const dateTo = document.getElementById('reportDateTo').value;
+    const pageSize = Number(document.getElementById('reportPageSize').value || 25);
+
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (state) params.append('state', state);
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+    params.append('page', String(currentReportPage));
+    params.append('page_size', String(pageSize));
+
+    try {
+        const response = await fetch(`${API_BASE}/reports/${currentReportType}?${params}`);
+        const rows = await response.json();
+
+        const container = document.getElementById('reportContent');
+        if (!Array.isArray(rows) || rows.length === 0) {
+            container.innerHTML = '<p class="info-text">No results</p>';
+            return;
+        }
+
+        // render table
+        let html = '<table class="table"><thead><tr>';
+        const keys = Object.keys(rows[0]);
+        keys.forEach(k => { html += `<th>${k.replace(/_/g,' ')}</th>`; });
+        html += '</tr></thead><tbody>';
+        rows.forEach(r => {
+            html += '<tr>';
+            keys.forEach(k => { html += `<td>${r[k] !== null ? r[k] : ''}</td>`; });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+
+        // pagination controls (simple)
+        html += `<div style="margin-top:10px;"><button class="btn" id="prevPage">Prev</button> <span>Page ${currentReportPage}</span> <button class="btn" id="nextPage">Next</button></div>`;
+
+        container.innerHTML = html;
+        document.getElementById('prevPage').onclick = () => { if (currentReportPage>1) { currentReportPage--; loadReport(); } };
+        document.getElementById('nextPage').onclick = () => { currentReportPage++; loadReport(); };
+
+    } catch (error) {
+        console.error('Error loading report:', error);
+        showAlert('Failed to load report', 'error');
+    }
+}
+
+async function exportReport(type, format) {
+    const search = document.getElementById('reportSearch').value;
+    const state = document.getElementById('reportStateFilter').value;
+    const dateFrom = document.getElementById('reportDateFrom').value;
+    const dateTo = document.getElementById('reportDateTo').value;
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (state) params.append('state', state);
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+
+    const url = `${API_BASE}/export/${format}/${type}?${params}`;
+    window.open(url, '_blank');
+}
+
+async function deleteState(id, stateName) {
+    if (!confirm(`Are you sure you want to delete the state "${stateName}"?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/states/${id}`, {
+            method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            showAlert(`State "${stateName}" deleted successfully`, 'success');
+            loadStatesList();
+            loadStates();
+        } else {
+            showAlert(data.error || 'Failed to delete state', 'error');
+        }
+    } catch (error) {
+        showAlert('Error connecting to server', 'error');
     }
 }
 

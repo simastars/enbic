@@ -20,6 +20,7 @@
             <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
             <button class="tab-btn" data-tab="arns">ARN Management</button>
             <button class="tab-btn" data-tab="delivery">Delivery</button>
+            <button class="tab-btn" data-tab="states">States</button>
             <button class="tab-btn" data-tab="reports">Reports</button>
         </nav>
 
@@ -148,6 +149,22 @@
             </div>
         </div>
 
+        <!-- States Tab -->
+        <div id="states" class="tab-content">
+            <div class="section">
+                <h2>Add New State</h2>
+                <form id="addStateForm" class="form-inline">
+                    <input type="text" id="stateNameInput" placeholder="Enter state name (e.g., Sokoto, Bauchi)" required>
+                    <button type="submit" class="btn btn-primary">Add State</button>
+                </form>
+            </div>
+
+            <div class="section">
+                <h2>Existing States</h2>
+                <div id="statesList" class="states-list"></div>
+            </div>
+        </div>
+
         <!-- Reports Tab -->
         <div id="reports" class="tab-content">
             <div class="section">
@@ -203,6 +220,25 @@
 
             <div class="section" id="reportView" style="display: none;">
                 <h2 id="reportTitle"></h2>
+                <div id="reportFilters" class="report-filters">
+                    <input type="text" id="reportSearch" placeholder="Search ARN or text" />
+                    <select id="reportStateFilter">
+                        <option value="">All States</option>
+                    </select>
+                    <input type="date" id="reportDateFrom" />
+                    <input type="date" id="reportDateTo" />
+                    <select id="reportPageSize">
+                        <option value="25">25</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <button class="btn btn-primary" id="applyReportFilters">Apply</button>
+                    <button class="btn" id="clearReportFilters">Clear</button>
+                    <div style="float:right;">
+                        <button class="btn btn-secondary" id="exportReportExcel">Excel</button>
+                        <button class="btn btn-secondary" id="exportReportPdf">PDF</button>
+                    </div>
+                </div>
                 <div id="reportContent" class="report-content"></div>
             </div>
         </div>
