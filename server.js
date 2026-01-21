@@ -20,6 +20,11 @@ if (!fs.existsSync(path.dirname(DB_PATH))) {
 if (!fs.existsSync(BACKUP_DIR)) {
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
+// Directory to store dispatch notes
+const DISPATCH_NOTES_DIR = path.join(__dirname, 'data', 'dispatch_notes');
+if (!fs.existsSync(DISPATCH_NOTES_DIR)) {
+  fs.mkdirSync(DISPATCH_NOTES_DIR, { recursive: true });
+}
 
 // Middleware
 app.use(cors());
@@ -96,6 +101,24 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       resolved_at DATETIME,
       FOREIGN KEY (arn) REFERENCES arns(arn)
+    )`);
+
+    // Dispatch batches table (store signatures and file paths for immutable evidence)
+    db.run(`CREATE TABLE IF NOT EXISTS dispatch_batches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      batch_id TEXT UNIQUE NOT NULL,
+      state TEXT NOT NULL,
+      card_count INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      operator_name TEXT,
+      operator_signed_at DATETIME,
+      officer_name TEXT,
+      officer_signed_at DATETIME,
+      dispatched_at DATETIME,
+      delivered_at DATETIME,
+      delivery_note_path TEXT,
+      confirmation_note_path TEXT,
+      status TEXT DEFAULT 'prepared'
     )`);
 
     console.log('Database initialized');
@@ -220,6 +243,24 @@ function logAudit(arn, action, oldValue, newValue) {
     `INSERT INTO audit_log (arn, action, old_value, new_value) VALUES (?, ?, ?, ?)`,
     [arn, action, oldValue, newValue]
   );
+}
+
+// Helper: save data URL (data:<mime>;base64,...) to file and return path
+function saveDataUrlToFile(dataUrl, prefix) {
+  try {
+    const match = dataUrl.match(/^data:(.+);base64,(.+)$/);
+    if (!match) return null;
+    const mime = match[1];
+    const base64 = match[2];
+    const ext = mime.split('/')[1] || 'bin';
+    const filename = `${prefix}_${Date.now()}.${ext}`;
+    const filePath = path.join(DISPATCH_NOTES_DIR, filename);
+    fs.writeFileSync(filePath, Buffer.from(base64, 'base64'));
+    return filePath;
+  } catch (e) {
+    console.error('Failed to save data URL to file', e);
+    return null;
+  }
 }
 
 // Helper: Validate status transition
@@ -423,6 +464,187 @@ app.post('/api/delivery/confirm', (req, res) => {
       );
     }
   );
+});
+
+// Dispatch batches: create batch (server-side)
+app.post('/api/dispatch/batches', (req, res) => {
+  const { batchId, state, cardCount } = req.body;
+  if (!batchId || !state) return res.status(400).json({ error: 'batchId and state required' });
+
+  db.run(`INSERT INTO dispatch_batches (batch_id, state, card_count) VALUES (?, ?, ?)`, [batchId, state, cardCount || 0], function(err) {
+    if (err) {
+      if (err.message && err.message.includes('UNIQUE')) return res.status(409).json({ error: 'Batch already exists' });
+      return res.status(500).json({ error: err.message });
+    }
+    res.json({ success: true, id: this.lastID });
+  });
+});
+
+// List dispatch batches
+app.get('/api/dispatch/batches', (req, res) => {
+  db.all(`SELECT * FROM dispatch_batches ORDER BY created_at DESC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// Sign a batch (operator or officer) and optionally upload signed delivery note (data URL)
+app.post('/api/dispatch/:batchId/sign', (req, res) => {
+  const batchId = req.params.batchId;
+  const { signer, name, fileData } = req.body; // signer: 'operator' or 'officer'
+  if (!signer || !name) return res.status(400).json({ error: 'signer and name required' });
+
+  db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!batch) return res.status(404).json({ error: 'Batch not found' });
+
+    const updates = [];
+    const params = [];
+
+    if (signer === 'operator') {
+      updates.push('operator_name = ?', 'operator_signed_at = CURRENT_TIMESTAMP');
+      params.push(name);
+    } else if (signer === 'officer') {
+      updates.push('officer_name = ?', 'officer_signed_at = CURRENT_TIMESTAMP');
+      params.push(name);
+    } else {
+      return res.status(400).json({ error: 'Invalid signer' });
+    }
+
+    // handle fileData (data URL)
+    if (fileData) {
+      const savedPath = saveDataUrlToFile(fileData, `batch_${batchId}`);
+      if (savedPath) {
+        updates.push('delivery_note_path = ?');
+        params.push(savedPath);
+      }
+    }
+
+    // finalize update
+    params.push(batchId);
+    const sql = `UPDATE dispatch_batches SET ${updates.join(', ')} WHERE batch_id = ?`;
+    db.run(sql, params, function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+
+      // if both signatures now present, set status to ready_for_dispatch
+      db.get(`SELECT operator_name, officer_name FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err3, updated) => {
+        if (!err3 && updated && updated.operator_name && updated.officer_name) {
+          db.run(`UPDATE dispatch_batches SET status = 'ready_for_dispatch' WHERE batch_id = ?`, [batchId]);
+        }
+      });
+
+      res.json({ success: true });
+    });
+  });
+});
+
+// Confirm dispatch (mark dispatched_at)
+app.post('/api/dispatch/:batchId/confirm', (req, res) => {
+  const batchId = req.params.batchId;
+  db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!batch) return res.status(404).json({ error: 'Batch not found' });
+    if (!batch.operator_name || !batch.officer_name) return res.status(400).json({ error: 'Both signatures required before dispatch' });
+
+    db.run(`UPDATE dispatch_batches SET dispatched_at = CURRENT_TIMESTAMP, status = 'dispatched' WHERE batch_id = ?`, [batchId], function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      res.json({ success: true });
+    });
+  });
+});
+
+// Upload confirmation note and mark delivered (accepts data URL)
+app.post('/api/dispatch/:batchId/confirmation', (req, res) => {
+  const batchId = req.params.batchId;
+  const { fileData } = req.body;
+  if (!fileData) return res.status(400).json({ error: 'fileData is required' });
+
+  db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!batch) return res.status(404).json({ error: 'Batch not found' });
+
+    const savedPath = saveDataUrlToFile(fileData, `confirmation_${batchId}`);
+    if (!savedPath) return res.status(500).json({ error: 'Failed to save confirmation file' });
+
+    // mark ARNs delivered for the state and log delivery history
+    db.all('SELECT arn FROM arns WHERE state = ? AND status = ?', [batch.state, 'Pending Delivery'], (err2, rows) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      const arns = rows.map(r => r.arn);
+      const arnCount = arns.length;
+
+      if (arnCount > 0) {
+        const placeholders = arns.map(() => '?').join(',');
+        db.run(`UPDATE arns SET status = 'Delivered', delivered_at = CURRENT_TIMESTAMP WHERE arn IN (${placeholders})`, arns, function(err3) {
+          if (err3) console.error('Error marking ARNs delivered:', err3);
+        });
+
+        db.run(`INSERT INTO delivery_history (state, arn_count, operator_notes) VALUES (?, ?, ?)`, [batch.state, arnCount, 'Delivered via dispatch confirmation'], (err4) => {
+          if (err4) console.error('Error logging delivery history:', err4);
+        });
+      }
+
+      db.run(`UPDATE dispatch_batches SET confirmation_note_path = ?, delivered_at = CURRENT_TIMESTAMP, status = 'delivered' WHERE batch_id = ?`, [savedPath, batchId], function(err5) {
+        if (err5) return res.status(500).json({ error: err5.message });
+        // log audit entries
+        arns.forEach(a => logAudit(a, 'BULK_DELIVERED_VIA_DISPATCH', 'Pending Delivery', `Delivered (Batch: ${batchId})`));
+        res.json({ success: true, count: arnCount });
+      });
+    });
+  });
+
+  // Generate delivery note for a batch (server-side) and save file
+  app.post('/api/dispatch/:batchId/generate-note', (req, res) => {
+    const batchId = req.params.batchId;
+    db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!batch) return res.status(404).json({ error: 'Batch not found' });
+
+      // fetch ARNs for the state that are pending delivery
+      db.all('SELECT arn, state, status, created_at FROM arns WHERE state = ? AND status = ?', [batch.state, 'Pending Delivery'], (err2, rows) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+
+        const title = `Delivery Note - ${batch.state}`;
+        const signInfo = `Operator: ${batch.operator_name || 'N/A'}\nStore Officer: ${batch.officer_name || 'N/A'}`;
+        const rowsHtml = (rows || []).map(a => `<tr><td>${a.arn}</td><td>${a.state}</td><td>${a.status}</td><td>${a.created_at ? a.created_at : ''}</td></tr>`).join('');
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+          <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
+          </head><body>
+          <h1>${title}</h1>
+          <div><strong>Batch ID:</strong> ${batch.batch_id}</div>
+          <div><strong>Created:</strong> ${batch.created_at}</div>
+          <div style="margin-top:8px">${signInfo}</div>
+          <div style="margin-top:12px"><strong>Card Count:</strong> ${batch.card_count}</div>
+          <table><thead><tr><th>ARN</th><th>State</th><th>Status</th><th>Created</th></tr></thead><tbody>
+          ${rowsHtml}
+          </tbody></table>
+          <div style="margin-top:18px;font-size:12px;color:#666">Generated by ENBIC Tracking System</div>
+          </body></html>`;
+
+        // save html to file
+        const filename = `batch_${batchId}_delivery_note_${Date.now()}.html`;
+        const filePath = path.join(DISPATCH_NOTES_DIR, filename);
+        fs.writeFile(filePath, html, (err3) => {
+          if (err3) return res.status(500).json({ error: err3.message });
+          db.run(`UPDATE dispatch_batches SET delivery_note_path = ? WHERE batch_id = ?`, [filePath, batchId], function(err4) {
+            if (err4) return res.status(500).json({ error: err4.message });
+            res.json({ success: true, path: filePath });
+          });
+        });
+      });
+    });
+  });
+
+  // Serve stored delivery or confirmation files for a batch
+  app.get('/api/dispatch/:batchId/file/:which', (req, res) => {
+    const { batchId, which } = req.params;
+    db.get(`SELECT delivery_note_path, confirmation_note_path FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!row) return res.status(404).json({ error: 'Batch not found' });
+      const filePath = which === 'delivery' ? row.delivery_note_path : row.confirmation_note_path;
+      if (!filePath) return res.status(404).json({ error: 'File not found' });
+      res.sendFile(filePath);
+    });
+  });
 });
 
 // Get reminders

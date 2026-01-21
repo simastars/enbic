@@ -158,6 +158,116 @@ header h1 {
     background: #c0392b;
 }
 
+/* Modern styles for report tables with advanced filters */
+/* Targets: .report-module, .report-card, .advanced-filter, .advance-filter, data attributes */
+.report-card .report-table,
+.report-module table,
+.advanced-filter table,
+.advance-filter table,
+[data-advance-filter] table,
+.report-filter table,
+.table--report {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: white;
+    border: 1px solid rgba(52,152,219,0.08);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 6px 18px rgba(31,45,61,0.06);
+}
+
+.report-card .report-table thead th,
+.report-module thead th,
+.advanced-filter thead th,
+[data-advance-filter] thead th {
+    background: linear-gradient(180deg,#f6fbff 0%, #eef7ff 100%);
+    color: #1f3a57;
+    font-weight: 700;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(31,45,61,0.06);
+}
+
+.report-card .report-table tbody td,
+.report-module tbody td,
+.advanced-filter tbody td,
+[data-advance-filter] tbody td {
+    padding: 12px 14px;
+    font-size: 14px;
+    color: #2c3e50;
+    vertical-align: middle;
+    border-bottom: 1px solid rgba(31,45,61,0.04);
+}
+
+.report-card .report-table tbody tr:nth-child(even) td,
+.report-module tbody tr:nth-child(even) td {
+    background: #fbfdff;
+}
+
+.report-card .report-table tbody tr:hover td,
+.report-module tbody tr:hover td {
+    background: linear-gradient(90deg, rgba(52,152,219,0.03), rgba(52,152,219,0.01));
+}
+
+.report-card .report-table th:first-child,
+.report-card .report-table td:first-child,
+.report-module th:first-child,
+.report-module td:first-child {
+    padding-left: 18px;
+}
+
+.report-table .badge,
+.report-card .report-table .badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+/* Filter controls container near tables */
+.advanced-filter .filter-controls,
+.report-filter .filter-controls,
+.report-card .filter-controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 14px 8px 14px;
+    border-bottom: 1px solid rgba(31,45,61,0.04);
+    background: linear-gradient(180deg, rgba(255,255,255,0.6), rgba(255,255,255,0.4));
+}
+
+.advanced-filter .filter-controls .filter-input,
+.advanced-filter .filter-controls .filter-select,
+.report-filter .filter-controls .filter-input,
+.report-filter .filter-controls .filter-select {
+    padding: 8px 10px;
+    border: 1px solid rgba(31,45,61,0.06);
+    border-radius: 6px;
+    background: #fff;
+}
+
+/* Responsive wrapper for narrow screens */
+.report-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    border-radius: 10px;
+}
+
+@media (max-width: 768px) {
+    .report-card .report-table thead th {
+        font-size: 12px;
+        padding: 10px 8px;
+    }
+
+    .report-card .report-table tbody td {
+        padding: 10px 8px;
+        font-size: 13px;
+    }
+}
 .form-inline {
     display: flex;
     gap: 10px;

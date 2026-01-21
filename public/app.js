@@ -497,12 +497,261 @@ async function loadPendingDeliveries() {
                         </div>
                     `).join('')}
                 </div>
+                <div style="margin-top:10px;">
+                    <button class="btn btn-primary" onclick="prepareDispatch('${state}', ${stateArns.length})">Generate Delivery Note</button>
+                </div>
             </div>
         `).join('');
     } catch (error) {
         console.error('Error loading pending deliveries:', error);
     }
 }
+
+/* Delivery dispatch: server-backed batch management and signature workflow */
+async function fetchDispatchBatches() {
+    try {
+        const res = await fetch(`${API_BASE}/dispatch/batches`);
+        if (!res.ok) return [];
+        return await res.json();
+    } catch (e) { console.error('Error fetching batches', e); return []; }
+}
+
+async function prepareDispatch(state, cardCount) {
+    const batchId = `batch-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+    try {
+        const res = await fetch(`${API_BASE}/dispatch/batches`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ batchId, state, cardCount: cardCount || 0 })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(()=>({}));
+            return showAlert(err.error || 'Failed to create dispatch batch', 'error');
+        }
+        showAlert('Delivery note prepared (server) for ' + state, 'success');
+        await renderDispatchBatches();
+    } catch (e) { console.error(e); showAlert('Failed to create batch', 'error'); }
+}
+
+async function openDeliveryNoteModal(batchId, signer) {
+    // get batch metadata from server
+    const batches = await fetchDispatchBatches();
+    const batch = batches.find(b => b.batch_id === batchId);
+    if (!batch) return;
+
+    // create modal form to collect signer name and optional signed file
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'block';
+
+    const content = document.createElement('div');
+    content.className = 'modal-content';
+    content.style.maxWidth = '520px';
+    content.innerHTML = `
+        <h2>${signer === 'operator' ? 'Operator' : 'Store Officer'} Signature</h2>
+        <p>Batch: <strong>${batch.state}</strong> — ${batch.card_count} card(s)</p>
+        <label style="display:block;margin-top:10px;">Name</label>
+        <input id="_sig_name" type="text" style="width:100%;padding:8px;margin-top:6px;border:1px solid #ddd;border-radius:6px;">
+        <label style="display:block;margin-top:10px;">Signed Delivery Note (optional PDF/image)</label>
+        <input id="_sig_file" type="file" accept=".pdf,image/*" style="width:100%;margin-top:6px;">
+        <div style="margin-top:14px;text-align:right;display:flex;gap:8px;justify-content:flex-end;">
+            <button id="_sig_cancel" class="btn">Cancel</button>
+            <button id="_sig_save" class="btn btn-primary">Save Signature</button>
+        </div>
+    `;
+
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+
+    function close() { modal.remove(); }
+    document.getElementById('_sig_cancel').onclick = () => close();
+
+    document.getElementById('_sig_save').onclick = async () => {
+        const nameInput = document.getElementById('_sig_name');
+        const fileInput = document.getElementById('_sig_file');
+        const name = nameInput.value.trim();
+        if (!name) { alert('Please enter a name for the signature'); return; }
+
+        let fileData = null;
+        if (fileInput.files && fileInput.files[0]) {
+            try { fileData = await fileToBase64(fileInput.files[0]); } catch (e) { console.error('Error reading file', e); showAlert('Failed to read uploaded file', 'error'); return; }
+        }
+
+        try {
+            const res = await fetch(`${API_BASE}/dispatch/${batchId}/sign`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ signer, name, fileData })
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(()=>({}));
+                showAlert(err.error || 'Failed to save signature', 'error');
+                return;
+            }
+
+            // if both signatures present, ask server to generate delivery note
+            const updated = await fetchDispatchBatches();
+            const updatedBatch = updated.find(b => b.batch_id === batchId);
+            if (updatedBatch && updatedBatch.operator_name && updatedBatch.officer_name && !updatedBatch.delivery_note_path) {
+                // generate server-side delivery note
+                await fetch(`${API_BASE}/dispatch/${batchId}/generate-note`, { method: 'POST' });
+            }
+
+            await renderDispatchBatches();
+            close();
+            showAlert(`${signer} signature captured for ${batch.state}`, 'success');
+        } catch (e) { console.error(e); showAlert('Failed to save signature', 'error'); }
+    };
+
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+}
+
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+async function renderDispatchBatches() {
+    const container = document.getElementById('dispatchBatches');
+    if (!container) return;
+    const batches = await fetchDispatchBatches();
+    if (!batches || batches.length === 0) {
+        container.innerHTML = '<p class="info-text">No dispatch batches prepared.</p>';
+        return;
+    }
+
+    container.innerHTML = batches.map(b => {
+        const hasOperator = !!b.operator_name;
+        const hasOfficer = !!b.officer_name;
+        const signedNoteExists = !!b.delivery_note_path;
+
+        const canOperatorSign = !hasOperator && b.status === 'prepared';
+        const canOfficerSign = hasOperator && !hasOfficer && b.status === 'prepared';
+        const canConfirmDispatch = b.status === 'ready_for_dispatch';
+        const canUploadConfirmation = b.status === 'dispatched';
+        const canDownloadNote = signedNoteExists || (hasOperator && hasOfficer);
+
+        const operatorText = hasOperator ? `${b.operator_name} (${b.operator_signed_at ? new Date(b.operator_signed_at).toLocaleString() : ''})` : '<em>pending</em>';
+        const officerText = hasOfficer ? `${b.officer_name} (${b.officer_signed_at ? new Date(b.officer_signed_at).toLocaleString() : ''})` : '<em>pending</em>';
+
+        return `
+        <div class="pending-delivery-item" style="display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div><strong>${b.state}</strong> — ${b.card_count} card(s)</div>
+                <div style="font-size:12px;color:#666">Created: ${new Date(b.created_at).toLocaleString()}</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <div>Operator: ${operatorText}</div>
+                <div>Store Officer: ${officerText}</div>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-secondary" ${canOperatorSign ? '' : 'disabled'} onclick="openDeliveryNoteModal('${b.batch_id}','operator')">Sign as Operator</button>
+                <button class="btn btn-secondary" ${canOfficerSign ? '' : 'disabled'} onclick="openDeliveryNoteModal('${b.batch_id}','officer')">Counter-sign (Store Officer)</button>
+                <button class="btn btn-primary" ${canConfirmDispatch ? '' : 'disabled'} onclick="confirmDispatch('${b.batch_id}')">Confirm Dispatch</button>
+                <button class="btn" onclick="downloadDeliveryNote('${b.batch_id}')" ${canDownloadNote ? '' : 'disabled'}>Download Delivery Note</button>
+                <button class="btn btn-success" ${canUploadConfirmation ? '' : 'disabled'} onclick="receiveConfirmation('${b.batch_id}')">Upload Confirmation Note</button>
+            </div>
+            <div style="font-size:12px;color:#666">Status: ${b.status}</div>
+        </div>
+        `;
+    }).join('');
+}
+
+async function downloadDeliveryNote(batchId) {
+    try {
+        // fetch latest batch record
+        const batches = await fetchDispatchBatches();
+        const b = batches.find(x => x.batch_id === batchId);
+        if (!b) return showAlert('Batch not found', 'error');
+
+        // ensure server has generated/saved a delivery note
+        if (!b.delivery_note_path) {
+            // attempt to generate server-side; ignore failure and try fetching file anyway
+            try {
+                await fetch(`${API_BASE}/dispatch/${batchId}/generate-note`, { method: 'POST' });
+            } catch (e) { console.warn('generate-note failed', e); }
+            // refresh batch record (allow server a short moment to write file)
+            await new Promise(r => setTimeout(r, 400));
+        }
+
+        // Try fetching the stored file with a few retries
+        let attempt = 0;
+        let res = null;
+        while (attempt < 4) {
+            try {
+                res = await fetch(`${API_BASE}/dispatch/${batchId}/file/delivery`);
+                if (res && res.ok) break;
+            } catch (e) {
+                console.warn('fetch file attempt error', attempt, e);
+            }
+            attempt++;
+            await new Promise(r => setTimeout(r, 300 * attempt));
+        }
+
+        if (!res || !res.ok) {
+            // attempt to surface server-provided path for troubleshooting
+            const refreshed = await fetchDispatchBatches();
+            const rb = refreshed.find(x => x.batch_id === batchId);
+            const serverPath = rb && rb.delivery_note_path ? rb.delivery_note_path : null;
+            console.warn('Failed to retrieve delivery note for', batchId, 'serverPath:', serverPath);
+            return showAlert(serverPath ? `Delivery note not yet available. Server path: ${serverPath}` : 'Failed to download delivery note', 'error');
+        }
+
+        const blob = await res.blob();
+        // try to infer extension from response headers or fallback to html
+        const contentType = res.headers.get('content-type') || '';
+        const ext = contentType.includes('pdf') ? '.pdf' : (contentType.includes('html') ? '.html' : '');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `${batchId}-delivery-note${ext}`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    } catch (e) { console.error(e); showAlert('Failed to download delivery note', 'error'); }
+}
+
+async function confirmDispatch(batchId) {
+    try {
+        const res = await fetch(`${API_BASE}/dispatch/${batchId}/confirm`, { method: 'POST' });
+        if (!res.ok) { const err = await res.json().catch(()=>({})); return showAlert(err.error || 'Failed to confirm dispatch', 'error'); }
+        showAlert('Dispatch confirmed (server) for ' + batchId, 'success');
+        await renderDispatchBatches();
+    } catch (e) { console.error(e); showAlert('Failed to confirm dispatch', 'error'); }
+}
+
+async function receiveConfirmation(batchId) {
+    // ask user to upload confirmation file
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.pdf,image/*';
+    fileInput.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+            const data = await fileToBase64(file);
+            const res = await fetch(`${API_BASE}/dispatch/${batchId}/confirmation`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fileData: data })
+            });
+            if (!res.ok) { const err = await res.json().catch(()=>({})); return showAlert(err.error || 'Failed to upload confirmation', 'error'); }
+            showAlert(`Confirmation received for ${batchId}. Batch marked Delivered.`, 'success');
+            await renderDispatchBatches();
+        } catch (e) { console.error(e); showAlert('Failed to upload confirmation', 'error'); }
+    };
+    fileInput.click();
+}
+
+// ensure dispatch batches render when loading delivery tab
+const originalLoadDeliveryTab = loadDeliveryTab;
+loadDeliveryTab = async function() {
+    await originalLoadDeliveryTab();
+    renderDispatchBatches();
+};
+
+// expose for onclick handlers
+window.prepareDispatch = prepareDispatch;
+window.openDeliveryNoteModal = openDeliveryNoteModal;
+window.renderDispatchBatches = renderDispatchBatches;
+window.confirmDispatch = confirmDispatch;
+window.receiveConfirmation = receiveConfirmation;
 
 async function loadDeliveryHistory() {
     try {
@@ -654,7 +903,6 @@ function viewReport(type) {
     states.forEach(s => {
         const opt = document.createElement('option'); opt.value = s; opt.textContent = s; stateSelect.appendChild(opt);
     });
-
     // wire buttons
     document.getElementById('applyReportFilters').onclick = () => { currentReportPage = 1; loadReport(); };
     document.getElementById('clearReportFilters').onclick = () => {
@@ -698,9 +946,8 @@ async function loadReport() {
             container.innerHTML = '<p class="info-text">No results</p>';
             return;
         }
-
-        // render table
-        let html = '<table class="table"><thead><tr>';
+        // render table (use report-table so styles apply)
+        let html = '<div class="report-table-wrap"><table class="report-table"><thead><tr>';
         const keys = Object.keys(rows[0]);
         keys.forEach(k => { html += `<th>${k.replace(/_/g,' ')}</th>`; });
         html += '</tr></thead><tbody>';
@@ -709,7 +956,7 @@ async function loadReport() {
             keys.forEach(k => { html += `<td>${r[k] !== null ? r[k] : ''}</td>`; });
             html += '</tr>';
         });
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
 
         // pagination controls (simple)
         html += `<div style="margin-top:10px;"><button class="btn" id="prevPage">Prev</button> <span>Page ${currentReportPage}</span> <button class="btn" id="nextPage">Next</button></div>`;
