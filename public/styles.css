@@ -87,6 +87,23 @@ header h1 {
     font-size: 20px;
 }
 
+/* Two-column layout for dashboard sections (reminders + delivery stats) */
+.section-columns {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+}
+.section-columns .column {
+    flex: 1;
+    min-width: 300px;
+}
+
+@media (max-width: 768px) {
+    .section-columns {
+        flex-direction: column;
+    }
+}
+
 .stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

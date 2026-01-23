@@ -28,7 +28,9 @@ if (!fs.existsSync(DISPATCH_NOTES_DIR)) {
 
 // Middleware
 app.use(cors());
-app.use(bodyParser.json());
+// Increase payload limits to allow uploading signed/confirmation files as data URLs
+app.use(bodyParser.json({ limit: '20mb' }));
+app.use(bodyParser.urlencoded({ limit: '20mb', extended: true }));
 app.use(express.static('public'));
 
 // Initialize database
