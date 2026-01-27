@@ -244,15 +244,195 @@ function setupEventListeners() {
             }
         });
     }
+
+    // Inventory: receive
+    const receiveForm = document.getElementById('receiveForm');
+    if (receiveForm) {
+        receiveForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const qty = Number(document.getElementById('receiveQty').value);
+            const reference = document.getElementById('receiveRef').value.trim();
+            const notes = document.getElementById('receiveNotes').value.trim();
+            if (!qty || qty <= 0) return showAlert('Enter a valid quantity', 'error');
+            try {
+                const res = await fetch(`${API_BASE}/inventory/receive`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ qty, reference, notes }) });
+                const d = await res.json();
+                if (!res.ok) return showAlert(d.error || 'Failed to record receipt', 'error');
+                showAlert('Receipt recorded', 'success');
+                document.getElementById('receiveQty').value = '';
+                await Promise.all([loadInventoryBalance(), loadLedger(), loadLowStock()]);
+            } catch (e) { showAlert('Error recording receipt', 'error'); }
+        });
+    }
+
+    // Issue to personalization
+    const issuePersoForm = document.getElementById('issuePersoForm');
+
+                        // Receive personalized ARNs into store
+                        const receiveArnsBtn = document.getElementById('receiveArnsBtn');
+                        if (receiveArnsBtn) {
+                            receiveArnsBtn.addEventListener('click', async () => {
+                                const text = document.getElementById('receiveArnsInput').value || '';
+                                const state = document.getElementById('receiveArnsState').value || '';
+                                const arns = text.split(/\s|,|;|\n/).map(s=>s.trim()).filter(Boolean);
+                                if (arns.length === 0) return showAlert('Provide at least one ARN', 'error');
+                                try {
+                                    const res = await fetch(`${API_BASE}/arns/receive`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ arns, state: state || null }) });
+                                    const d = await res.json();
+                                    if (!res.ok) return showAlert(d.error || 'Failed to register ARNs', 'error');
+                                    const result = d.results || [];
+                                    const ok = result.filter(r=>r.success).length;
+                                    document.getElementById('receiveArnsResult').innerHTML = `<div>${ok} succeeded, ${result.length-ok} failed.</div><pre>${JSON.stringify(result,null,2)}</pre>`;
+                                    showAlert('Processed ARNs', 'success');
+                                    await Promise.all([loadARNs(), loadInventoryBalance(), loadLowStock()]);
+                                } catch (e) { showAlert('Error processing ARNs', 'error'); }
+                            });
+                        }
+
+                        // Record SHQ pickup
+                        const pickupArnsBtn = document.getElementById('pickupArnsBtn');
+                        if (pickupArnsBtn) {
+                            pickupArnsBtn.addEventListener('click', async () => {
+                                const text = document.getElementById('pickupArnsInput').value || '';
+                                const arns = text.split(/\s|,|;|\n/).map(s=>s.trim()).filter(Boolean);
+                                const collector_name = document.getElementById('collectorName').value.trim();
+                                const collector_id = document.getElementById('collectorId').value.trim();
+                                const phone = document.getElementById('collectorPhone').value.trim();
+                                if (arns.length === 0) return showAlert('Provide at least one ARN', 'error');
+                                if (!collector_name && !collector_id && !phone) return showAlert('Provide collector info', 'error');
+                                try {
+                                    const res = await fetch(`${API_BASE}/arns/pickup`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ arns, collector_name, collector_id, phone }) });
+                                    const d = await res.json();
+                                    if (!res.ok) return showAlert(d.error || 'Failed to record pickup', 'error');
+                                    const result = d.results || [];
+                                    const ok = result.filter(r=>r.success).length;
+                                    document.getElementById('pickupArnsResult').innerHTML = `<div>${ok} succeeded, ${result.length-ok} failed.</div><pre>${JSON.stringify(result,null,2)}</pre>`;
+                                    showAlert('Recorded pickups', 'success');
+                                    await Promise.all([loadARNs(), loadDeliveryStats(), loadDashboardStats()]);
+                                } catch (e) { showAlert('Error recording pickup', 'error'); }
+                            });
+                        }
+    if (issuePersoForm) {
+        issuePersoForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const qty = Number(document.getElementById('issueQty').value);
+            const issued_to = document.getElementById('issueTo').value.trim();
+            const reference = document.getElementById('issueRef').value.trim();
+            if (!qty || qty <= 0) return showAlert('Enter a valid quantity', 'error');
+            try {
+                const res = await fetch(`${API_BASE}/inventory/issue-to-perso`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ qty, issued_to, reference }) });
+                const d = await res.json();
+                if (!res.ok) return showAlert(d.error || 'Failed to issue', 'error');
+                showAlert('Issued to personalization', 'success');
+                document.getElementById('issueQty').value = '';
+                await Promise.all([loadInventoryBalance(), loadLedger(), loadLowStock()]);
+            } catch (e) { showAlert('Error issuing', 'error'); }
+        });
+    }
+
+    // Create request
+    const requestForm = document.getElementById('requestForm');
+    if (requestForm) {
+        requestForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const quantity = Number(document.getElementById('requestQty').value);
+            const needed_by = document.getElementById('requestNeededBy').value || null;
+            const reason = document.getElementById('requestReason').value.trim();
+            if (!quantity || quantity <= 0) return showAlert('Enter a valid quantity', 'error');
+            try {
+                const res = await fetch(`${API_BASE}/inventory/requests`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ quantity, reason, needed_by }) });
+                const d = await res.json();
+                if (!res.ok) return showAlert(d.error || 'Failed to create request', 'error');
+                showAlert('Request created', 'success');
+                document.getElementById('requestQty').value = '';
+                await loadRequests();
+            } catch (e) { showAlert('Error creating request', 'error'); }
+        });
+    }
+
+    const refreshLedger = document.getElementById('refreshLedger');
+    if (refreshLedger) refreshLedger.addEventListener('click', loadLedger);
+    const refreshRecon = document.getElementById('refreshRecon');
+    if (refreshRecon) refreshRecon.addEventListener('click', loadReconciliation);
 }
 
 async function loadInitialData() {
+    await fetchCurrentUser();
     await Promise.all([
         loadStates(),
         loadDashboardStats(),
         loadDashboard() // populate reminders and delivery stats on initial load
     ]);
 }
+
+// Auth / UI helpers
+let currentUser = null;
+async function fetchCurrentUser() {
+    try {
+        const res = await fetch(`${API_BASE}/auth/me`);
+        if (!res.ok) { currentUser = null; updateAuthUI(); return; }
+        const data = await res.json();
+        currentUser = data.user;
+        updateAuthUI();
+    } catch (e) { console.warn('failed to fetch current user', e); currentUser = null; updateAuthUI(); }
+}
+
+function updateAuthUI() {
+    const userDisplay = document.getElementById('userDisplay');
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const generateBtn = document.getElementById('generateRemindersBtn');
+
+    if (currentUser) {
+        userDisplay.textContent = `${currentUser.username} (${currentUser.role})`;
+        loginBtn.style.display = 'none';
+        logoutBtn.style.display = 'inline-block';
+        // Only operators/admins/supervisors can trigger manual reminders
+        if (generateBtn) generateBtn.disabled = !(currentUser.role === 'operator' || currentUser.role === 'admin' || currentUser.role === 'supervisor');
+    } else {
+        userDisplay.textContent = '';
+        loginBtn.style.display = 'inline-block';
+        logoutBtn.style.display = 'none';
+        if (generateBtn) generateBtn.disabled = true;
+    }
+}
+
+// Wire login/logout UI
+document.addEventListener('DOMContentLoaded', () => {
+    const loginBtn = document.getElementById('loginBtn');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const loginModal = document.getElementById('loginModal');
+    const loginClose = document.getElementById('loginClose');
+    const loginForm = document.getElementById('loginForm');
+    const loginError = document.getElementById('loginError');
+
+    if (loginBtn) loginBtn.addEventListener('click', () => { if (loginModal) loginModal.style.display = 'block'; });
+    if (loginClose) loginClose.addEventListener('click', () => { if (loginModal) loginModal.style.display = 'none'; });
+    if (logoutBtn) logoutBtn.addEventListener('click', async () => {
+        try { await fetch(`${API_BASE}/auth/logout`, { method: 'POST' }); currentUser = null; updateAuthUI(); showAlert('Logged out', 'success'); } catch (e) { showAlert('Logout failed', 'error'); }
+    });
+
+    if (loginForm) loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        loginError.style.display = 'none';
+        const u = document.getElementById('loginUsername').value.trim();
+        const p = document.getElementById('loginPassword').value;
+        try {
+            const res = await fetch(`${API_BASE}/auth/login`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: u, password: p })
+            });
+            const d = await res.json();
+            if (!res.ok) { loginError.textContent = d.error || 'Login failed'; loginError.style.display = 'block'; return; }
+            currentUser = d.user; updateAuthUI(); if (loginModal) loginModal.style.display = 'none'; showAlert('Logged in', 'success');
+            // reload UI data that may be role dependent
+            await Promise.all([loadStates(), loadDashboardStats(), loadDashboard(), loadARNs(), loadDeliveryTab()]);
+        } catch (err) { loginError.textContent = 'Login error'; loginError.style.display = 'block'; }
+    });
+
+    // close login modal when clicking outside
+    window.addEventListener('click', (e) => { if (e.target === document.getElementById('loginModal')) { document.getElementById('loginModal').style.display = 'none'; } });
+});
 
 async function loadStates() {
     try {
@@ -317,6 +497,117 @@ async function loadDashboard() {
         loadReminders(),
         loadDeliveryStats()
     ]);
+
+    // inventory quick loads
+    try { await Promise.all([loadInventoryBalance(), loadLowStock()]); } catch(e){/*ignore*/}
+}
+
+// Inventory UI functions
+async function loadInventoryBalance() {
+    try {
+        const res = await fetch(`${API_BASE}/inventory/balance`);
+        if (!res.ok) return;
+        const d = await res.json();
+        document.getElementById('inventoryBalanceTotal').textContent = d.total;
+    } catch (e) { console.warn('loadInventoryBalance', e); }
+}
+
+async function loadLowStock() {
+    try {
+        const res = await fetch(`${API_BASE}/inventory/low-stock`);
+        if (!res.ok) return;
+        const d = await res.json();
+        const el = document.getElementById('inventoryLowStock');
+        if (d.low) el.textContent = `Low stock! Threshold: ${d.threshold}`; else el.textContent = '';
+    } catch (e) { console.warn('loadLowStock', e); }
+}
+
+async function loadLedger() {
+    try {
+        const res = await fetch(`${API_BASE}/inventory/ledger`);
+        const rows = await res.json();
+        const container = document.getElementById('inventoryLedger');
+        if (!rows || rows.length === 0) { container.innerHTML = '<p class="info-text">No movements</p>'; return; }
+        container.innerHTML = `<table class="report-table"><thead><tr><th>When</th><th>Type</th><th>Qty</th><th>Ref</th><th>Operator</th><th>Notes</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${formatDate(r.created_at)}</td><td>${r.type}</td><td>${r.qty}</td><td>${r.reference||''}</td><td>${r.operator||''}</td><td>${r.notes||''}</td></tr>`).join('')}</tbody></table>`;
+    } catch (e) { console.error('Error loading ledger', e); showAlert('Failed to load ledger', 'error'); }
+}
+
+async function loadRequests() {
+    try {
+        const res = await fetch(`${API_BASE}/inventory/requests`);
+        const rows = await res.json();
+        const container = document.getElementById('requestsList');
+        if (!rows || rows.length === 0) { container.innerHTML = '<p class="info-text">No requests</p>'; return; }
+        container.innerHTML = rows.map(r=>{
+            return `<div style="padding:8px;border-bottom:1px solid #eee;"><div><strong>Request #${r.id}</strong> by ${r.requester||'N/A'} — qty ${r.quantity} — status: ${r.status}</div><div class="meta">Needed by: ${r.needed_by||'N/A'}</div><div style="margin-top:6px;display:flex;gap:8px;"><button class="btn" onclick="generateIssue(${r.id})" ${r.status==='approved' || r.status==='partially_approved' ? '' : 'disabled'}>Generate Issue</button><button class="btn" onclick="openDecideModal(${r.id}, '${r.status}', ${r.quantity})">Decide</button></div></div>`;
+        }).join('');
+    } catch (e) { console.error('Error loading requests', e); }
+}
+
+window.generateIssue = async function(requestId) {
+    try {
+        const res = await fetch(`${API_BASE}/inventory/requests/${requestId}/generate-issue`, { method: 'POST' });
+        const d = await res.json();
+        if (!res.ok) return showAlert(d.error || 'Failed to generate issue', 'error');
+        showAlert('Issue note created', 'success');
+        await loadIssueNotes();
+    } catch (e) { console.error(e); showAlert('Failed to generate issue', 'error'); }
+}
+
+window.openDecideModal = function(id, status, qty) {
+    const modal = document.createElement('div'); modal.className='modal'; modal.style.display='block';
+    modal.innerHTML = `<div class="modal-content" style="max-width:480px"><h3>Decide Request #${id}</h3><div>Current status: ${status}</div><label>Action</label><select id="_dec_action"><option value="approve">Approve</option><option value="partial">Partial</option><option value="reject">Reject</option></select><label>Approved Qty (for partial)</label><input id="_dec_qty" type="number" value="${qty}"><label>Decision note</label><input id="_dec_note" type="text"><div style="margin-top:10px;text-align:right"><button id="_dec_cancel" class="btn">Cancel</button><button id="_dec_save" class="btn btn-primary">Save</button></div></div>`;
+    document.body.appendChild(modal);
+    document.getElementById('_dec_cancel').onclick = ()=>modal.remove();
+    document.getElementById('_dec_save').onclick = async ()=>{
+        const action = document.getElementById('_dec_action').value;
+        const approved_qty = Number(document.getElementById('_dec_qty').value)||0;
+        const decision_note = document.getElementById('_dec_note').value.trim();
+        try {
+            const res = await fetch(`${API_BASE}/inventory/requests/${id}/decide`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ action: action==='approve' ? 'approve' : (action==='partial' ? 'partial' : 'reject'), approved_qty, decision_note }) });
+            const d = await res.json();
+            if (!res.ok) return showAlert(d.error || 'Failed to decide', 'error');
+            showAlert('Decision recorded', 'success'); modal.remove(); await loadRequests();
+        } catch (e) { showAlert('Error recording decision', 'error'); }
+    };
+}
+
+async function loadIssueNotes() {
+    try {
+        const res = await fetch(`${API_BASE}/inventory/issue-notes`);
+        const rows = await res.json();
+        const container = document.getElementById('issueNotesList');
+        if (!rows || rows.length===0) { container.innerHTML = '<p class="info-text">No issue notes</p>'; return; }
+        container.innerHTML = rows.map(i=>`<div style="padding:8px;border-bottom:1px solid #eee;"><div><strong>Issue #${i.id}</strong> req:${i.request_id} qty:${i.quantity} status:${i.status}</div><div>Issuer: ${i.issuer_name||''} ${i.issuer_signed_at ? ('at '+formatDate(i.issuer_signed_at)) : ''}</div><div>Receiver: ${i.receiver_name||''} ${i.receiver_signed_at ? ('at '+formatDate(i.receiver_signed_at)) : ''}</div><div style="margin-top:6px;display:flex;gap:8px;"><button class="btn" onclick="openIssueSign(${i.id}, 'issuer')" ${i.issuer_name? 'disabled': ''}>Sign as Issuer</button><button class="btn" onclick="openIssueSign(${i.id}, 'receiver')" ${i.receiver_name? 'disabled': ''}>Sign as Receiver</button></div></div>`).join('');
+    } catch (e) { console.error('Error loading issue notes', e); }
+}
+
+window.openIssueSign = function(issueId, signer) {
+    const modal = document.createElement('div'); modal.className='modal'; modal.style.display='block';
+    modal.innerHTML = `<div class="modal-content" style="max-width:480px"><h3>Sign Issue #${issueId} as ${signer}</h3><label>Name</label><input id="_is_name" type="text"><label>Upload (optional)</label><input id="_is_file" type="file" accept=".pdf,image/*"><div style="margin-top:10px;text-align:right"><button id="_is_cancel" class="btn">Cancel</button><button id="_is_save" class="btn btn-primary">Save</button></div></div>`;
+    document.body.appendChild(modal);
+    document.getElementById('_is_cancel').onclick = ()=>modal.remove();
+    document.getElementById('_is_save').onclick = async ()=>{
+        const name = document.getElementById('_is_name').value.trim();
+        const fileInput = document.getElementById('_is_file');
+        let fileData = null;
+        if (!name) return alert('Enter name');
+        if (fileInput.files && fileInput.files[0]) { try { fileData = await fileToBase64(fileInput.files[0]); } catch(e){ console.error(e); } }
+        try {
+            const res = await fetch(`${API_BASE}/inventory/issue/${issueId}/sign`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ signer, name, fileData }) });
+            const d = await res.json(); if (!res.ok) return showAlert(d.error || 'Failed to sign', 'error');
+            showAlert('Signature saved', 'success'); modal.remove(); await loadIssueNotes(); await loadInventoryBalance(); await loadLedger();
+        } catch (e) { showAlert('Error signing', 'error'); }
+    };
+}
+
+async function loadReconciliation() {
+    try {
+        const res = await fetch(`${API_BASE}/inventory/reconciliation`);
+        const d = await res.json();
+        const el = document.getElementById('reconResult');
+        el.innerHTML = `<div>Opening: ${d.opening} | Received: ${d.received} | Issued: ${d.issued} | Damaged: ${d.damaged} | Lost: ${d.lost} | Adjustments: ${d.adjustments} | Expected: <strong>${d.expected}</strong></div>`;
+    } catch (e) { console.error('recon', e); }
 }
 
 async function loadReminders() {

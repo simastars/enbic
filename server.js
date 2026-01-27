@@ -7,6 +7,8 @@ const fs = require('fs');
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const moment = require('moment');
+const session = require('express-session');
+const bcrypt = require('bcrypt');
 
 const app = express();
 const PORT = 3000;
@@ -32,6 +34,14 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '20mb' }));
 app.use(bodyParser.urlencoded({ limit: '20mb', extended: true }));
 app.use(express.static('public'));
+
+// Simple session-based auth (suitable for local use). For production, replace store.
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'enbic-dev-secret',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { maxAge: 24 * 60 * 60 * 1000 }
+}));
 
 // Initialize database
 const db = new sqlite3.Database(DB_PATH, (err) => {
@@ -69,6 +79,8 @@ function initializeDatabase() {
       captured_at DATETIME,
       submitted_at DATETIME,
       pending_delivery_at DATETIME,
+      stored_at DATETIME,
+      collected_at DATETIME,
       delivered_at DATETIME,
       notes TEXT,
       FOREIGN KEY (state) REFERENCES states(name)
@@ -123,9 +135,103 @@ function initializeDatabase() {
       status TEXT DEFAULT 'prepared'
     )`);
 
+    // Users table for authentication and RBAC
+    db.run(`CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'operator',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // Seed a default admin user if none exists
+    db.get(`SELECT COUNT(*) as cnt FROM users`, [], (err, row) => {
+      if (!err && row && row.cnt === 0) {
+        const defaultPass = process.env.ADMIN_PW || 'admin123';
+        const hash = bcrypt.hashSync(defaultPass, 10);
+        db.run(`INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)`, ['admin', hash, 'admin']);
+        console.log('Seeded default admin user (username: admin)');
+      }
+    });
+
+    // Inventory: stock movements ledger
+    db.run(`CREATE TABLE IF NOT EXISTS stock_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL, -- received, issued, adjustment, damaged, lost
+      qty INTEGER NOT NULL,
+      reference TEXT,
+      related_request_id INTEGER,
+      operator TEXT,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // Blank card requests from Store Officer
+    db.run(`CREATE TABLE IF NOT EXISTS blank_card_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      requester_id INTEGER,
+      quantity INTEGER NOT NULL,
+      reason TEXT,
+      needed_by DATE,
+      status TEXT DEFAULT 'pending', -- pending, approved, partially_approved, rejected
+      approved_qty INTEGER DEFAULT 0,
+      approver_id INTEGER,
+      decision_note TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME
+    )`);
+
+    // Issue notes / handover records (require issuer and receiver signatures)
+    db.run(`CREATE TABLE IF NOT EXISTS issue_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id INTEGER,
+      quantity INTEGER NOT NULL,
+      issuer_name TEXT,
+      issuer_signed_at DATETIME,
+      receiver_name TEXT,
+      receiver_signed_at DATETIME,
+      issue_note_path TEXT,
+      status TEXT DEFAULT 'pending_signatures', -- pending_signatures, signed, completed
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // Settings (e.g., low stock threshold)
+    db.run(`CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )`);
+
+    // seed default low_stock_threshold if missing
+    db.get(`SELECT value FROM settings WHERE key = 'low_stock_threshold'`, [], (err2, r2) => {
+      if (!err2 && !r2) {
+        db.run(`INSERT INTO settings (key, value) VALUES (?, ?)`, ['low_stock_threshold', '100']);
+      }
+    });
+
     console.log('Database initialized');
   });
 }
+
+// ensure arns table has optional columns for older DBs
+db.serialize(() => {
+  db.get(`PRAGMA table_info(arns)`, [], (err, row) => {
+    // add stored_at if missing
+    db.all(`PRAGMA table_info(arns)`, [], (err2, cols) => {
+      if (!err2 && cols) {
+        const names = cols.map(c => c.name);
+        if (!names.includes('stored_at')) {
+          db.run(`ALTER TABLE arns ADD COLUMN stored_at DATETIME`);
+        }
+        if (!names.includes('collected_at')) {
+          db.run(`ALTER TABLE arns ADD COLUMN collected_at DATETIME`);
+        }
+        if (!names.includes('collected_info')) {
+          db.run(`ALTER TABLE arns ADD COLUMN collected_info TEXT`);
+        }
+      }
+    });
+  });
+});
 
 // Generate reminders logic extracted so it can be triggered automatically
 function generateRemindersInDB(cb) {
@@ -270,13 +376,97 @@ function isValidStatusTransition(currentStatus, newStatus) {
   const validTransitions = {
     'Awaiting Capture': ['Submitted to Personalization'],
     'Submitted to Personalization': ['Pending Delivery'],
-    'Pending Delivery': ['Delivered'],
+    'Pending Delivery': ['Delivered','Collected at SHQ'],
+    'Collected at SHQ': [],
+    'Stored': ['Pending Delivery'],
     'Delivered': [] // Final state
   };
   return validTransitions[currentStatus]?.includes(newStatus) || false;
 }
 
+// --- Authentication & RBAC helpers ---
+function requireLogin(req, res, next) {
+  if (req.session && req.session.user) return next();
+  return res.status(401).json({ error: 'Authentication required' });
+}
+
+function requireRole(roles) {
+  return function(req, res, next) {
+    if (!req.session || !req.session.user) return res.status(401).json({ error: 'Authentication required' });
+    const userRole = req.session.user.role;
+    if (Array.isArray(roles)) {
+      if (roles.includes(userRole) || userRole === 'admin') return next();
+    } else {
+      if (userRole === roles || userRole === 'admin') return next();
+    }
+    return res.status(403).json({ error: 'Forbidden: insufficient role' });
+  };
+}
+
+// Auth endpoints
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+  db.get(`SELECT id, username, password_hash, role FROM users WHERE username = ?`, [username], (err, user) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    bcrypt.compare(password, user.password_hash, (err2, ok) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+      // success
+      req.session.user = { id: user.id, username: user.username, role: user.role };
+      res.json({ success: true, user: req.session.user });
+    });
+  });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  if (req.session) {
+    req.session.destroy(() => {
+      res.json({ success: true });
+    });
+  } else {
+    res.json({ success: true });
+  }
+});
+
+app.get('/api/auth/me', (req, res) => {
+  if (req.session && req.session.user) return res.json({ user: req.session.user });
+  res.json({ user: null });
+});
+
+// end auth helpers
+
 // API Routes
+
+// Inventory helpers
+function getCurrentStock(cb) {
+  db.get(`SELECT SUM(qty) as total FROM stock_movements`, [], (err, row) => {
+    if (err) return cb(err);
+    const total = row && row.total ? Number(row.total) : 0;
+    cb(null, total);
+  });
+}
+
+function getSetting(key, cb) {
+  db.get(`SELECT value FROM settings WHERE key = ?`, [key], (err, row) => {
+    if (err) return cb(err);
+    cb(null, row ? row.value : null);
+  });
+}
+
+// Require low stock check helper
+function checkLowStock(cb) {
+  getSetting('low_stock_threshold', (err, val) => {
+    if (err) return cb(err);
+    const threshold = val ? Number(val) : 0;
+    getCurrentStock((err2, total) => {
+      if (err2) return cb(err2);
+      cb(null, { total, threshold, low: total < threshold });
+    });
+  });
+}
+
 
 // Get all ARNs with filters
 app.get('/api/arns', (req, res) => {
@@ -308,6 +498,298 @@ app.get('/api/arns', (req, res) => {
   });
 });
 
+// Receive personalized ARNs into store (batch)
+app.post('/api/arns/receive', requireRole(['officer','admin','operator']), (req, res) => {
+  const { arns, state } = req.body;
+  if (!Array.isArray(arns) || arns.length === 0) return res.status(400).json({ error: 'arns array required' });
+
+  const results = [];
+  const tasks = arns.map(a => new Promise((resolve) => {
+    const arn = (a || '').trim();
+    if (!arn) return resolve({ arn, success: false, message: 'Empty ARN' });
+    db.get(`SELECT * FROM arns WHERE arn = ?`, [arn], (err, row) => {
+      if (err) return resolve({ arn, success: false, message: err.message });
+      if (!row) return resolve({ arn, success: false, message: 'ARN not found' });
+      // Only allow if submitted to personalization (or other states as needed)
+      if (row.status !== 'Submitted to Personalization' && row.status !== 'Awaiting Capture') {
+        // allow update if already Pending Delivery? skip
+      }
+      const newState = state || row.state;
+      db.run(`UPDATE arns SET status = 'Pending Delivery', state = ?, pending_delivery_at = CURRENT_TIMESTAMP, stored_at = CURRENT_TIMESTAMP WHERE arn = ?`, [newState, arn], function(err2) {
+        if (err2) return resolve({ arn, success: false, message: err2.message });
+        logAudit(arn, 'RECEIVED_IN_STORE', row.status, 'Pending Delivery');
+        resolve({ arn, success: true });
+      });
+    });
+  }));
+
+  Promise.all(tasks).then(resultsArr => {
+    res.json({ success: true, results: resultsArr });
+  });
+});
+
+// Record SHQ pickup for one or many ARNs
+app.post('/api/arns/pickup', requireRole(['officer','admin','operator']), (req, res) => {
+  const { arns, collector_name, collector_id, phone } = req.body;
+  if (!Array.isArray(arns) || arns.length === 0) return res.status(400).json({ error: 'arns array required' });
+  if (!collector_name && !collector_id && !phone) return res.status(400).json({ error: 'collector info required' });
+
+  const results = [];
+  const tasks = arns.map(a => new Promise((resolve) => {
+    const arn = (a || '').trim();
+    if (!arn) return resolve({ arn, success: false, message: 'Empty ARN' });
+    db.get(`SELECT * FROM arns WHERE arn = ?`, [arn], (err, row) => {
+      if (err) return resolve({ arn, success: false, message: err.message });
+      if (!row) return resolve({ arn, success: false, message: 'ARN not found' });
+      // Only allow pickup if Pending Delivery
+      if (row.status !== 'Pending Delivery') return resolve({ arn, success: false, message: `Invalid status (${row.status})` });
+      const info = JSON.stringify({ collector_name, collector_id, phone });
+      db.run(`UPDATE arns SET status = 'Collected at SHQ', collected_at = CURRENT_TIMESTAMP, collected_info = ? WHERE arn = ?`, [info, arn], function(err2) {
+        if (err2) return resolve({ arn, success: false, message: err2.message });
+        logAudit(arn, 'PICKED_UP_SHQ', row.status, `Collected by ${collector_name||collector_id||phone}`);
+        resolve({ arn, success: true });
+      });
+    });
+  }));
+
+  Promise.all(tasks).then(resultsArr => {
+    res.json({ success: true, results: resultsArr });
+  });
+});
+
+// Inventory endpoints
+// Receive blank cards into store (Store Officer)
+app.post('/api/inventory/receive', requireRole(['officer','operator','admin']), (req, res) => {
+  const { qty, reference, notes } = req.body;
+  if (!qty || Number(qty) <= 0) return res.status(400).json({ error: 'Quantity required and must be > 0' });
+  const q = Number(qty);
+  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, notes) VALUES (?, ?, ?, ?, ?)`, ['received', q, reference || '', req.session.user ? req.session.user.username : 'unknown', notes || ''], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    logAudit(null, 'INVENTORY_RECEIVE', null, `+${q} (${reference || ''})`);
+    res.json({ success: true, id: this.lastID });
+  });
+});
+
+// Get current balance
+app.get('/api/inventory/balance', requireLogin, (req, res) => {
+  getCurrentStock((err, total) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ total });
+  });
+});
+
+// Get ledger (movements)
+app.get('/api/inventory/ledger', requireLogin, (req, res) => {
+  const { page = 1, page_size = 100 } = req.query;
+  const limit = Math.min(Number(page_size) || 100, 1000);
+  const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
+  db.all(`SELECT * FROM stock_movements ORDER BY created_at DESC LIMIT ? OFFSET ?`, [limit, offset], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// Adjustments / damaged / lost
+app.post('/api/inventory/adjust', requireRole(['officer','admin','operator']), (req, res) => {
+  const { qty, type, reference, notes } = req.body; // qty positive or negative depending on adjustment
+  if (!qty || Number(qty) === 0) return res.status(400).json({ error: 'Quantity required and cannot be zero' });
+  const q = Number(qty);
+  const allowed = ['adjustment','damaged','lost'];
+  if (!type || !allowed.includes(type)) return res.status(400).json({ error: 'Invalid adjustment type' });
+  // store negative qty for damaged/lost/issued types
+  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, notes) VALUES (?, ?, ?, ?, ?)`, [type, q, reference || '', req.session.user ? req.session.user.username : 'unknown', notes || ''], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    logAudit(null, 'INVENTORY_ADJUST', null, `${type} ${q}`);
+    res.json({ success: true, id: this.lastID });
+  });
+});
+
+// Low-stock status
+app.get('/api/inventory/low-stock', requireLogin, (req, res) => {
+  checkLowStock((err, info) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(info);
+  });
+});
+
+// Create blank card request (Store Officer)
+app.post('/api/inventory/requests', requireRole(['officer','admin']), (req, res) => {
+  const { quantity, reason, needed_by } = req.body;
+  if (!quantity || Number(quantity) <= 0) return res.status(400).json({ error: 'Quantity required' });
+  const q = Number(quantity);
+  const requester_id = req.session.user ? req.session.user.id : null;
+  db.run(`INSERT INTO blank_card_requests (requester_id, quantity, reason, needed_by) VALUES (?, ?, ?, ?)`, [requester_id, q, reason || '', needed_by || null], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    logAudit(null, 'REQUEST_CREATED', null, `Request ${this.lastID} qty ${q}`);
+    res.json({ success: true, id: this.lastID });
+  });
+});
+
+// List requests
+app.get('/api/inventory/requests', requireRole(['operator','admin','officer','supervisor']), (req, res) => {
+  db.all(`SELECT r.*, u.username as requester FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id ORDER BY r.created_at DESC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// Approve or reject request (Admin/Operator)
+app.post('/api/inventory/requests/:id/decide', requireRole(['operator','admin']), (req, res) => {
+  const id = req.params.id;
+  const { action, approved_qty, decision_note } = req.body; // action: approve|partial|reject
+  if (!action || !['approve','partial','reject'].includes(action)) return res.status(400).json({ error: 'Invalid action' });
+  db.get(`SELECT * FROM blank_card_requests WHERE id = ?`, [id], (err, reqRow) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!reqRow) return res.status(404).json({ error: 'Request not found' });
+    const approver_id = req.session.user ? req.session.user.id : null;
+    let status = 'rejected';
+    let approved = 0;
+    if (action === 'approve') { status = 'approved'; approved = reqRow.quantity; }
+    if (action === 'partial') { status = 'partially_approved'; approved = Number(approved_qty) || 0; }
+    if (action === 'reject') { status = 'rejected'; approved = 0; }
+
+    db.run(`UPDATE blank_card_requests SET status = ?, approved_qty = ?, approver_id = ?, decision_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [status, approved, approver_id, decision_note || '', id], function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      logAudit(null, 'REQUEST_DECIDED', reqRow.status, `${status} qty ${approved}`);
+      res.json({ success: true, status, approved_qty: approved });
+    });
+  });
+});
+
+// Generate Issue Note for an approved request
+app.post('/api/inventory/requests/:id/generate-issue', requireRole(['operator','admin']), (req, res) => {
+  const id = req.params.id;
+  db.get(`SELECT * FROM blank_card_requests WHERE id = ?`, [id], (err, rrow) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!rrow) return res.status(404).json({ error: 'Request not found' });
+    if (!['approved','partially_approved'].includes(rrow.status) && rrow.approved_qty <= 0) return res.status(400).json({ error: 'Request not approved' });
+    const qty = rrow.approved_qty || rrow.quantity;
+    db.run(`INSERT INTO issue_notes (request_id, quantity) VALUES (?, ?)`, [id, qty], function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      res.json({ success: true, issue_id: this.lastID, quantity: qty });
+    });
+  });
+});
+
+// Sign issue note (issuer or receiver) and optionally upload note file
+app.post('/api/inventory/issue/:issueId/sign', requireLogin, (req, res) => {
+  const issueId = req.params.issueId;
+  const { signer, name, fileData } = req.body; // signer: 'issuer' or 'receiver'
+  if (!signer || !name) return res.status(400).json({ error: 'signer and name required' });
+
+  db.get(`SELECT * FROM issue_notes WHERE id = ?`, [issueId], (err, issue) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!issue) return res.status(404).json({ error: 'Issue note not found' });
+
+    const updates = [];
+    const params = [];
+    if (signer === 'issuer') {
+      // only operator/admin can be issuer
+      if (!(req.session.user && (req.session.user.role === 'operator' || req.session.user.role === 'admin'))) return res.status(403).json({ error: 'Forbidden' });
+      updates.push('issuer_name = ?', 'issuer_signed_at = CURRENT_TIMESTAMP'); params.push(name);
+    } else if (signer === 'receiver') {
+      // receiver should be store officer
+      if (!(req.session.user && (req.session.user.role === 'officer' || req.session.user.role === 'admin'))) return res.status(403).json({ error: 'Forbidden' });
+      updates.push('receiver_name = ?', 'receiver_signed_at = CURRENT_TIMESTAMP'); params.push(name);
+    } else {
+      return res.status(400).json({ error: 'Invalid signer' });
+    }
+
+    if (fileData) {
+      const saved = saveDataUrlToFile(fileData, `issue_${issueId}`);
+      if (saved) { updates.push('issue_note_path = ?'); params.push(saved); }
+    }
+
+    params.push(issueId);
+    const sql = `UPDATE issue_notes SET ${updates.join(', ')} WHERE id = ?`;
+    db.run(sql, params, function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+
+      // check if both signed now
+      db.get(`SELECT * FROM issue_notes WHERE id = ?`, [issueId], (err3, uissue) => {
+        if (!err3 && uissue && uissue.issuer_name && uissue.receiver_name && uissue.status !== 'completed') {
+          // mark completed and add qty to stock_movements (store receives the approved qty)
+          db.run(`UPDATE issue_notes SET status = 'completed' WHERE id = ?`, [issueId]);
+          db.run(`INSERT INTO stock_movements (type, qty, reference, related_request_id, operator, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['received_from_issue', uissue.quantity, `issue_${issueId}`, uissue.request_id, req.session.user ? req.session.user.username : 'system', 'Received via issue note'], function(err4) {
+            if (err4) console.error('Error adding stock from issue:', err4);
+            // update request status if needed
+            db.run(`UPDATE blank_card_requests SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [uissue.request_id]);
+          });
+        }
+      });
+
+      res.json({ success: true });
+    });
+  });
+});
+
+// Issue blank cards to personalization (Store -> Perso). Reduces stock immediately.
+app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin']), (req, res) => {
+  const { qty, issued_to, reference, notes } = req.body;
+  if (!qty || Number(qty) <= 0) return res.status(400).json({ error: 'Quantity required' });
+  const q = Number(qty);
+  // check stock
+  getCurrentStock((err, total) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (total < q) return res.status(400).json({ error: 'Insufficient stock' });
+    // record movement as negative qty
+    db.run(`INSERT INTO stock_movements (type, qty, reference, operator, notes) VALUES (?, ?, ?, ?, ?)`, ['issued', -q, reference || issued_to || '', req.session.user ? req.session.user.username : 'unknown', notes || 'Issued to personalization'], function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      logAudit(null, 'INVENTORY_ISSUED', null, `-${q} to ${issued_to || reference || ''}`);
+      res.json({ success: true, id: this.lastID });
+    });
+  });
+});
+
+// Reconciliation view: opening + received - issued - damaged/lost = expected
+app.get('/api/inventory/reconciliation', requireRole(['officer','operator','admin','supervisor']), (req, res) => {
+  const { date_from, date_to } = req.query;
+  // For simplicity, compute sums over the period
+  const params = [];
+  let where = '1=1';
+  if (date_from) { where += ' AND date(created_at) >= date(?)'; params.push(date_from); }
+  if (date_to) { where += ' AND date(created_at) <= date(?)'; params.push(date_to); }
+
+  const sql = `SELECT type, SUM(qty) as total FROM stock_movements WHERE ${where} GROUP BY type`;
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const map = {};
+    rows.forEach(r => { map[r.type] = Number(r.total || 0); });
+    // opening stock is cumulative before date_from
+    if (date_from) {
+      db.get(`SELECT SUM(qty) as opening FROM stock_movements WHERE date(created_at) < date(?)`, [date_from], (err2, orow) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+        const opening = Number(orow && orow.opening ? orow.opening : 0);
+        const received = Number(map.received || 0) + Number(map.received_from_issue || 0) + Number(map.received_from_issue || 0);
+        const issued = Math.abs(Number(map.issued || 0));
+        const damaged = Math.abs(Number(map.damaged || 0));
+        const lost = Math.abs(Number(map.lost || 0));
+        const adjustments = Number(map.adjustment || 0);
+        const expected = opening + received + adjustments - issued - damaged - lost;
+        res.json({ opening, received, issued, damaged, lost, adjustments, expected });
+      });
+    } else {
+      const received = Number(map.received || 0) + Number(map.received_from_issue || 0);
+      const issued = Math.abs(Number(map.issued || 0));
+      const damaged = Math.abs(Number(map.damaged || 0));
+      const lost = Math.abs(Number(map.lost || 0));
+      const adjustments = Number(map.adjustment || 0);
+      // opening assumed 0 if no date_from
+      const opening = 0;
+      const expected = opening + received + adjustments - issued - damaged - lost;
+      res.json({ opening, received, issued, damaged, lost, adjustments, expected });
+    }
+  });
+});
+
+// List issue notes
+app.get('/api/inventory/issue-notes', requireLogin, (req, res) => {
+  db.all(`SELECT i.*, u1.username as requester, u2.username as approver FROM issue_notes i LEFT JOIN users u1 ON i.issuer_name = u1.username LEFT JOIN users u2 ON i.receiver_name = u2.username ORDER BY i.created_at DESC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
 // Get single ARN
 app.get('/api/arns/:arn', (req, res) => {
   db.get('SELECT * FROM arns WHERE arn = ?', [req.params.arn], (err, row) => {
@@ -322,7 +804,7 @@ app.get('/api/arns/:arn', (req, res) => {
 });
 
 // Add new ARN
-app.post('/api/arns', (req, res) => {
+app.post('/api/arns', requireLogin, (req, res) => {
   const { arn, state } = req.body;
 
   if (!arn || !state) {
@@ -359,7 +841,7 @@ app.post('/api/arns', (req, res) => {
 });
 
 // Update ARN status
-app.put('/api/arns/:arn/status', (req, res) => {
+app.put('/api/arns/:arn/status', requireRole(['operator','admin','supervisor']), (req, res) => {
   const { status } = req.body;
   const { arn } = req.params;
 
@@ -415,7 +897,7 @@ app.put('/api/arns/:arn/status', (req, res) => {
 });
 
 // Bulk delivery confirmation by state
-app.post('/api/delivery/confirm', (req, res) => {
+app.post('/api/delivery/confirm', requireRole(['operator','admin','supervisor']), (req, res) => {
   const { state, notes } = req.body;
 
   if (!state) {
@@ -469,7 +951,7 @@ app.post('/api/delivery/confirm', (req, res) => {
 });
 
 // Dispatch batches: create batch (server-side)
-app.post('/api/dispatch/batches', (req, res) => {
+app.post('/api/dispatch/batches', requireRole(['operator','admin']), (req, res) => {
   const { batchId, state, cardCount } = req.body;
   if (!batchId || !state) return res.status(400).json({ error: 'batchId and state required' });
 
@@ -483,7 +965,7 @@ app.post('/api/dispatch/batches', (req, res) => {
 });
 
 // List dispatch batches
-app.get('/api/dispatch/batches', (req, res) => {
+app.get('/api/dispatch/batches', requireLogin, (req, res) => {
   db.all(`SELECT * FROM dispatch_batches ORDER BY created_at DESC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
@@ -491,10 +973,19 @@ app.get('/api/dispatch/batches', (req, res) => {
 });
 
 // Sign a batch (operator or officer) and optionally upload signed delivery note (data URL)
-app.post('/api/dispatch/:batchId/sign', (req, res) => {
+app.post('/api/dispatch/:batchId/sign', requireLogin, (req, res) => {
   const batchId = req.params.batchId;
   const { signer, name, fileData } = req.body; // signer: 'operator' or 'officer'
   if (!signer || !name) return res.status(400).json({ error: 'signer and name required' });
+
+  // role enforcement: operator-sign must be operator/admin; officer-sign must be officer/admin
+  const sessionRole = req.session && req.session.user && req.session.user.role;
+  if (signer === 'operator' && !(sessionRole === 'operator' || sessionRole === 'admin')) {
+    return res.status(403).json({ error: 'Forbidden: must be operator or admin to sign as operator' });
+  }
+  if (signer === 'officer' && !(sessionRole === 'officer' || sessionRole === 'admin')) {
+    return res.status(403).json({ error: 'Forbidden: must be officer or admin to sign as officer' });
+  }
 
   db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -541,7 +1032,7 @@ app.post('/api/dispatch/:batchId/sign', (req, res) => {
 });
 
 // Confirm dispatch (mark dispatched_at)
-app.post('/api/dispatch/:batchId/confirm', (req, res) => {
+app.post('/api/dispatch/:batchId/confirm', requireRole(['operator','admin']), (req, res) => {
   const batchId = req.params.batchId;
   db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -556,7 +1047,7 @@ app.post('/api/dispatch/:batchId/confirm', (req, res) => {
 });
 
 // Upload confirmation note and mark delivered (accepts data URL)
-app.post('/api/dispatch/:batchId/confirmation', (req, res) => {
+app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin','officer']), (req, res) => {
   const batchId = req.params.batchId;
   const { fileData } = req.body;
   if (!fileData) return res.status(400).json({ error: 'fileData is required' });
@@ -595,7 +1086,7 @@ app.post('/api/dispatch/:batchId/confirmation', (req, res) => {
   });
 
   // Generate delivery note for a batch (server-side) and save file
-  app.post('/api/dispatch/:batchId/generate-note', (req, res) => {
+  app.post('/api/dispatch/:batchId/generate-note', requireRole(['operator','admin']), (req, res) => {
     const batchId = req.params.batchId;
     db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
       if (err) return res.status(500).json({ error: err.message });
@@ -637,7 +1128,7 @@ app.post('/api/dispatch/:batchId/confirmation', (req, res) => {
   });
 
   // Serve stored delivery or confirmation files for a batch
-  app.get('/api/dispatch/:batchId/file/:which', (req, res) => {
+  app.get('/api/dispatch/:batchId/file/:which', requireLogin, (req, res) => {
     const { batchId, which } = req.params;
     db.get(`SELECT delivery_note_path, confirmation_note_path FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, row) => {
       if (err) return res.status(500).json({ error: err.message });
@@ -650,7 +1141,7 @@ app.post('/api/dispatch/:batchId/confirmation', (req, res) => {
 });
 
 // Get reminders
-app.get('/api/reminders', (req, res) => {
+app.get('/api/reminders', requireRole(['operator','admin','supervisor']), (req, res) => {
   const query = `
     SELECT r.*, a.state, a.status 
     FROM reminders r
@@ -669,7 +1160,7 @@ app.get('/api/reminders', (req, res) => {
 });
 
 // Generate reminders (should be called daily)
-app.post('/api/reminders/generate', (req, res) => {
+app.post('/api/reminders/generate', requireRole(['operator','admin']), (req, res) => {
   generateRemindersInDB((err) => {
     if (err) return res.status(500).json({ error: err.message || String(err) });
     res.json({ success: true, message: 'Reminders generated' });
@@ -677,7 +1168,7 @@ app.post('/api/reminders/generate', (req, res) => {
 });
 
 // Resolve reminder
-app.post('/api/reminders/:id/resolve', (req, res) => {
+app.post('/api/reminders/:id/resolve', requireRole(['operator','admin']), (req, res) => {
   const reminderId = req.params.id;
   db.get(`SELECT * FROM reminders WHERE id = ?`, [reminderId], (err, reminder) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -739,7 +1230,7 @@ app.post('/api/reminders/:id/resolve', (req, res) => {
 });
 
 // Get delivery statistics by state
-app.get('/api/delivery/stats', (req, res) => {
+app.get('/api/delivery/stats', requireLogin, (req, res) => {
   const query = `
     SELECT 
       state,
@@ -764,7 +1255,7 @@ app.get('/api/delivery/stats', (req, res) => {
 });
 
 // Get reports data
-app.get('/api/reports/:type', (req, res) => {
+app.get('/api/reports/:type', requireRole(['operator','admin','supervisor']), (req, res) => {
   const { type } = req.params;
   const { search, state, date_from, date_to, page = 1, page_size = 50 } = req.query;
   let query = '';
@@ -825,7 +1316,7 @@ app.get('/api/reports/:type', (req, res) => {
 });
 
 // Export to Excel
-app.get('/api/export/excel/:type', async (req, res) => {
+app.get('/api/export/excel/:type', requireRole(['operator','admin','supervisor']), async (req, res) => {
   const { type } = req.params;
   
   // Get data based on type
@@ -870,7 +1361,7 @@ app.get('/api/export/excel/:type', async (req, res) => {
 });
 
 // Export to PDF
-app.get('/api/export/pdf/:type', (req, res) => {
+app.get('/api/export/pdf/:type', requireRole(['operator','admin','supervisor']), (req, res) => {
   const { type } = req.params;
   
   db.all(`SELECT * FROM arns WHERE status = ?`, 
@@ -909,7 +1400,7 @@ app.get('/api/export/pdf/:type', (req, res) => {
 });
 
 // Get states list
-app.get('/api/states', (req, res) => {
+app.get('/api/states', requireLogin, (req, res) => {
   db.all('SELECT * FROM states ORDER BY name', [], (err, rows) => {
     if (err) {
       res.status(500).json({ error: err.message });
@@ -920,7 +1411,7 @@ app.get('/api/states', (req, res) => {
 });
 
 // Add new state
-app.post('/api/states', (req, res) => {
+app.post('/api/states', requireRole(['admin','operator']), (req, res) => {
   const { name } = req.body;
 
   if (!name || typeof name !== 'string' || name.trim() === '') {
@@ -948,7 +1439,7 @@ app.post('/api/states', (req, res) => {
 });
 
 // Delete state
-app.delete('/api/states/:id', (req, res) => {
+app.delete('/api/states/:id', requireRole(['admin','operator']), (req, res) => {
   const { id } = req.params;
 
   db.get('SELECT name FROM states WHERE id = ?', [id], (err, state) => {
