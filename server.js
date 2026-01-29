@@ -154,6 +154,16 @@ function initializeDatabase() {
       }
     });
 
+    // Ensure a default store officer user exists
+    db.get(`SELECT id FROM users WHERE username = ?`, ['officer'], (err3, urow) => {
+      if (!err3 && !urow) {
+        const officerPass = process.env.OFFICER_PW || 'officer123';
+        const hash2 = bcrypt.hashSync(officerPass, 10);
+        db.run(`INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)`, ['officer', hash2, 'officer']);
+        console.log('Seeded default store officer user (username: officer)');
+      }
+    });
+
     // Inventory: stock movements ledger
     db.run(`CREATE TABLE IF NOT EXISTS stock_movements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -571,7 +581,7 @@ app.post('/api/inventory/receive', requireRole(['officer','operator','admin']), 
 });
 
 // Get current balance
-app.get('/api/inventory/balance', requireLogin, (req, res) => {
+app.get('/api/inventory/balance', requireRole(['officer','admin']), (req, res) => {
   getCurrentStock((err, total) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ total });
@@ -579,7 +589,7 @@ app.get('/api/inventory/balance', requireLogin, (req, res) => {
 });
 
 // Get ledger (movements)
-app.get('/api/inventory/ledger', requireLogin, (req, res) => {
+app.get('/api/inventory/ledger', requireRole(['officer','admin']), (req, res) => {
   const { page = 1, page_size = 100 } = req.query;
   const limit = Math.min(Number(page_size) || 100, 1000);
   const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
@@ -605,7 +615,7 @@ app.post('/api/inventory/adjust', requireRole(['officer','admin','operator']), (
 });
 
 // Low-stock status
-app.get('/api/inventory/low-stock', requireLogin, (req, res) => {
+app.get('/api/inventory/low-stock', requireRole(['officer','admin']), (req, res) => {
   checkLowStock((err, info) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(info);
@@ -626,7 +636,7 @@ app.post('/api/inventory/requests', requireRole(['officer','admin']), (req, res)
 });
 
 // List requests
-app.get('/api/inventory/requests', requireRole(['operator','admin','officer','supervisor']), (req, res) => {
+app.get('/api/inventory/requests', requireRole(['operator','admin']), (req, res) => {
   db.all(`SELECT r.*, u.username as requester FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id ORDER BY r.created_at DESC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
@@ -783,7 +793,7 @@ app.get('/api/inventory/reconciliation', requireRole(['officer','operator','admi
 });
 
 // List issue notes
-app.get('/api/inventory/issue-notes', requireLogin, (req, res) => {
+app.get('/api/inventory/issue-notes', requireRole(['officer','operator','admin']), (req, res) => {
   db.all(`SELECT i.*, u1.username as requester, u2.username as approver FROM issue_notes i LEFT JOIN users u1 ON i.issuer_name = u1.username LEFT JOIN users u2 ON i.receiver_name = u2.username ORDER BY i.created_at DESC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
@@ -804,7 +814,7 @@ app.get('/api/arns/:arn', (req, res) => {
 });
 
 // Add new ARN
-app.post('/api/arns', requireLogin, (req, res) => {
+app.post('/api/arns', requireRole(['operator','admin']), (req, res) => {
   const { arn, state } = req.body;
 
   if (!arn || !state) {
@@ -965,7 +975,7 @@ app.post('/api/dispatch/batches', requireRole(['operator','admin']), (req, res) 
 });
 
 // List dispatch batches
-app.get('/api/dispatch/batches', requireLogin, (req, res) => {
+app.get('/api/dispatch/batches', requireRole(['operator','admin','officer']), (req, res) => {
   db.all(`SELECT * FROM dispatch_batches ORDER BY created_at DESC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
@@ -1082,50 +1092,51 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
         arns.forEach(a => logAudit(a, 'BULK_DELIVERED_VIA_DISPATCH', 'Pending Delivery', `Delivered (Batch: ${batchId})`));
         res.json({ success: true, count: arnCount });
       });
+      });
     });
   });
 
-  // Generate delivery note for a batch (server-side) and save file
-  app.post('/api/dispatch/:batchId/generate-note', requireRole(['operator','admin']), (req, res) => {
-    const batchId = req.params.batchId;
-    db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!batch) return res.status(404).json({ error: 'Batch not found' });
+// Generate delivery note for a batch (server-side) and save file
+    app.post('/api/dispatch/:batchId/generate-note', requireRole(['operator','admin']), (req, res) => {
+      const batchId = req.params.batchId;
+      db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err, batch) => {
+        if (err) return res.status(500).json({ error: err.message });
+        if (!batch) return res.status(404).json({ error: 'Batch not found' });
 
-      // fetch ARNs for the state that are pending delivery
-      db.all('SELECT arn, state, status, created_at FROM arns WHERE state = ? AND status = ?', [batch.state, 'Pending Delivery'], (err2, rows) => {
-        if (err2) return res.status(500).json({ error: err2.message });
+        // fetch ARNs for the state that are pending delivery
+        db.all('SELECT arn, state, status, created_at FROM arns WHERE state = ? AND status = ?', [batch.state, 'Pending Delivery'], (err2, rows) => {
+          if (err2) return res.status(500).json({ error: err2.message });
 
-        const title = `Delivery Note - ${batch.state}`;
-        const signInfo = `Operator: ${batch.operator_name || 'N/A'}\nStore Officer: ${batch.officer_name || 'N/A'}`;
-        const rowsHtml = (rows || []).map(a => `<tr><td>${a.arn}</td><td>${a.state}</td><td>${a.status}</td><td>${a.created_at ? a.created_at : ''}</td></tr>`).join('');
-        const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
-          <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
-          </head><body>
-          <h1>${title}</h1>
-          <div><strong>Batch ID:</strong> ${batch.batch_id}</div>
-          <div><strong>Created:</strong> ${batch.created_at}</div>
-          <div style="margin-top:8px">${signInfo}</div>
-          <div style="margin-top:12px"><strong>Card Count:</strong> ${batch.card_count}</div>
-          <table><thead><tr><th>ARN</th><th>State</th><th>Status</th><th>Created</th></tr></thead><tbody>
-          ${rowsHtml}
-          </tbody></table>
-          <div style="margin-top:18px;font-size:12px;color:#666">Generated by ENBIC Tracking System</div>
-          </body></html>`;
+          const title = `Delivery Note - ${batch.state}`;
+          const signInfo = `Operator: ${batch.operator_name || 'N/A'}\nStore Officer: ${batch.officer_name || 'N/A'}`;
+          const rowsHtml = (rows || []).map(a => `<tr><td>${a.arn}</td><td>${a.state}</td><td>${a.status}</td><td>${a.created_at ? a.created_at : ''}</td></tr>`).join('');
+          const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+            <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
+            </head><body>
+            <h1>${title}</h1>
+            <div><strong>Batch ID:</strong> ${batch.batch_id}</div>
+            <div><strong>Created:</strong> ${batch.created_at}</div>
+            <div style="margin-top:8px">${signInfo}</div>
+            <div style="margin-top:12px"><strong>Card Count:</strong> ${batch.card_count}</div>
+            <table><thead><tr><th>ARN</th><th>State</th><th>Status</th><th>Created</th></tr></thead><tbody>
+            ${rowsHtml}
+            </tbody></table>
+            <div style="margin-top:18px;font-size:12px;color:#666">Generated by ENBIC Tracking System</div>
+            </body></html>`;
 
-        // save html to file
-        const filename = `batch_${batchId}_delivery_note_${Date.now()}.html`;
-        const filePath = path.join(DISPATCH_NOTES_DIR, filename);
-        fs.writeFile(filePath, html, (err3) => {
-          if (err3) return res.status(500).json({ error: err3.message });
-          db.run(`UPDATE dispatch_batches SET delivery_note_path = ? WHERE batch_id = ?`, [filePath, batchId], function(err4) {
-            if (err4) return res.status(500).json({ error: err4.message });
-            res.json({ success: true, path: filePath });
+          // save html to file
+          const filename = `batch_${batchId}_delivery_note_${Date.now()}.html`;
+          const filePath = path.join(DISPATCH_NOTES_DIR, filename);
+          fs.writeFile(filePath, html, (err3) => {
+            if (err3) return res.status(500).json({ error: err3.message });
+            db.run(`UPDATE dispatch_batches SET delivery_note_path = ? WHERE batch_id = ?`, [filePath, batchId], function(err4) {
+              if (err4) return res.status(500).json({ error: err4.message });
+              res.json({ success: true, path: filePath });
+            });
           });
         });
       });
     });
-  });
 
   // Serve stored delivery or confirmation files for a batch
   app.get('/api/dispatch/:batchId/file/:which', requireLogin, (req, res) => {
@@ -1138,7 +1149,6 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
       res.sendFile(filePath);
     });
   });
-});
 
 // Get reminders
 app.get('/api/reminders', requireRole(['operator','admin','supervisor']), (req, res) => {

@@ -358,6 +358,10 @@ function setupEventListeners() {
 
 async function loadInitialData() {
     await fetchCurrentUser();
+    if (!currentUser) {
+        // Do not load further data until user logs in
+        return;
+    }
     await Promise.all([
         loadStates(),
         loadDashboardStats(),
@@ -383,17 +387,47 @@ function updateAuthUI() {
     const logoutBtn = document.getElementById('logoutBtn');
     const generateBtn = document.getElementById('generateRemindersBtn');
 
+    // Role-based tab visibility
+    const allowedTabs = {
+        admin: ['dashboard','arns','delivery','states','reports','inventory'],
+        operator: ['dashboard','arns','delivery','reports'],
+        officer: ['dashboard','delivery','inventory'],
+        supervisor: ['dashboard','reports']
+    };
+
+    const tabs = Array.from(document.querySelectorAll('.tab-btn'));
+    const tabContents = Array.from(document.querySelectorAll('.tab-content'));
+
     if (currentUser) {
         userDisplay.textContent = `${currentUser.username} (${currentUser.role})`;
         loginBtn.style.display = 'none';
         logoutBtn.style.display = 'inline-block';
         // Only operators/admins/supervisors can trigger manual reminders
         if (generateBtn) generateBtn.disabled = !(currentUser.role === 'operator' || currentUser.role === 'admin' || currentUser.role === 'supervisor');
+        // show/hide tabs based on role
+        const allowed = allowedTabs[currentUser.role] || [];
+        tabs.forEach(btn => {
+            const name = btn.dataset.tab;
+            btn.style.display = allowed.includes(name) ? '' : 'none';
+        });
+        // ensure an active tab is visible; if current active tab hidden, switch to first allowed
+        const activeBtn = document.querySelector('.tab-btn.active');
+        if (!activeBtn || activeBtn.style.display === 'none') {
+            const first = document.querySelector('.tab-btn[style*="display: "]') || document.querySelector('.tab-btn');
+            if (first && first.dataset && first.dataset.tab) switchTab(first.dataset.tab);
+        }
     } else {
         userDisplay.textContent = '';
         loginBtn.style.display = 'inline-block';
         logoutBtn.style.display = 'none';
         if (generateBtn) generateBtn.disabled = true;
+        // hide all tabs until login
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.style.display = 'none');
+        // hide all tab contents
+        tabContents.forEach(c => c.classList.remove('active'));
+        // show login modal
+        const loginModal = document.getElementById('loginModal');
+        if (loginModal) loginModal.style.display = 'block';
     }
 }
 
@@ -801,7 +835,7 @@ async function loadPendingDeliveries() {
 /* Delivery dispatch: server-backed batch management and signature workflow */
 async function fetchDispatchBatches() {
     try {
-        const res = await fetch(`${API_BASE}/dispatch/batches`);
+        const res = await fetch(`${API_BASE}/dispatch/batches`, { credentials: 'include' });
         if (!res.ok) return [];
         return await res.json();
     } catch (e) { console.error('Error fetching batches', e); return []; }
@@ -972,7 +1006,7 @@ async function downloadDeliveryNote(batchId) {
         let res = null;
         while (attempt < 4) {
             try {
-                res = await fetch(`${API_BASE}/dispatch/${batchId}/file/delivery`);
+                res = await fetch(`${API_BASE}/dispatch/${batchId}/file/delivery`, { credentials: 'include' });
                 if (res && res.ok) break;
             } catch (e) {
                 console.warn('fetch file attempt error', attempt, e);
