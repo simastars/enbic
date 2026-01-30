@@ -5,42 +5,44 @@ let states = [];
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
-    initializeTabs();
+    initializeSidebar();
     loadInitialData();
     setupEventListeners();
     setInterval(loadDashboardStats, 60000); // Refresh stats every minute
     setInterval(generateReminders, 24 * 60 * 60 * 1000); // Generate reminders daily
 });
 
-function initializeTabs() {
-    document.querySelectorAll('.tab-btn').forEach(btn => {
+function initializeSidebar() {
+    document.querySelectorAll('.sidebar-item').forEach(btn => {
         btn.addEventListener('click', () => {
-            const tabName = btn.dataset.tab;
-            switchTab(tabName);
+            const viewName = btn.dataset.view;
+            switchView(viewName);
         });
     });
 }
 
-function switchTab(tabName) {
-    document.querySelectorAll('.tab-btn').forEach(btn => {
+function switchView(viewName) {
+    document.querySelectorAll('.sidebar-item').forEach(btn => {
         btn.classList.remove('active');
     });
-    document.querySelectorAll('.tab-content').forEach(content => {
+    document.querySelectorAll('.view-content').forEach(content => {
         content.classList.remove('active');
     });
 
-    document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
-    document.getElementById(tabName).classList.add('active');
+    document.querySelector(`[data-view="${viewName}"]`).classList.add('active');
+    document.getElementById(viewName).classList.add('active');
 
-    // Load tab-specific data
-    if (tabName === 'dashboard') {
+    // Load view-specific data
+    if (viewName === 'dashboard') {
         loadDashboard();
-    } else if (tabName === 'arns') {
+    } else if (viewName === 'arns') {
         loadARNs();
-    } else if (tabName === 'delivery') {
+    } else if (viewName === 'delivery') {
         loadDeliveryTab();
-    } else if (tabName === 'states') {
+    } else if (viewName === 'states') {
         loadStatesList();
+    } else if (viewName === 'inventory') {
+        loadInventoryTab();
     }
 }
 
@@ -343,10 +345,34 @@ function setupEventListeners() {
                 const res = await fetch(`${API_BASE}/inventory/requests`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ quantity, reason, needed_by }) });
                 const d = await res.json();
                 if (!res.ok) return showAlert(d.error || 'Failed to create request', 'error');
-                showAlert('Request created', 'success');
+                showAlert('Request created successfully', 'success');
                 document.getElementById('requestQty').value = '';
+                document.getElementById('requestNeededBy').value = '';
+                document.getElementById('requestReason').value = '';
                 await loadRequests();
             } catch (e) { showAlert('Error creating request', 'error'); }
+        });
+    }
+
+    // Restock central inventory (Admin only)
+    const restockForm = document.getElementById('restockForm');
+    if (restockForm) {
+        restockForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const qty = Number(document.getElementById('restockQty').value);
+            const reference = document.getElementById('restockRef').value.trim();
+            const notes = document.getElementById('restockNotes').value.trim();
+            if (!qty || qty <= 0) return showAlert('Enter a valid quantity', 'error');
+            try {
+                const res = await fetch(`${API_BASE}/inventory/receive`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ qty, reference, notes }) });
+                const d = await res.json();
+                if (!res.ok) return showAlert(d.error || 'Failed to add stock', 'error');
+                showAlert('Central inventory updated successfully', 'success');
+                document.getElementById('restockQty').value = '';
+                document.getElementById('restockRef').value = '';
+                document.getElementById('restockNotes').value = '';
+                await Promise.all([loadInventoryBalance(), loadLedger()]);
+            } catch (e) { showAlert('Error updating inventory', 'error'); }
         });
     }
 
@@ -395,8 +421,8 @@ function updateAuthUI() {
         supervisor: ['dashboard','reports']
     };
 
-    const tabs = Array.from(document.querySelectorAll('.tab-btn'));
-    const tabContents = Array.from(document.querySelectorAll('.tab-content'));
+    const sidebarItems = Array.from(document.querySelectorAll('.sidebar-item'));
+    const viewContents = Array.from(document.querySelectorAll('.view-content'));
 
     if (currentUser) {
         userDisplay.textContent = `${currentUser.username} (${currentUser.role})`;
@@ -404,30 +430,42 @@ function updateAuthUI() {
         logoutBtn.style.display = 'inline-block';
         // Only operators/admins/supervisors can trigger manual reminders
         if (generateBtn) generateBtn.disabled = !(currentUser.role === 'operator' || currentUser.role === 'admin' || currentUser.role === 'supervisor');
-        // show/hide tabs based on role
+        // show/hide sidebar items based on role
         const allowed = allowedTabs[currentUser.role] || [];
-        tabs.forEach(btn => {
-            const name = btn.dataset.tab;
+        sidebarItems.forEach(btn => {
+            const name = btn.dataset.view;
             btn.style.display = allowed.includes(name) ? '' : 'none';
         });
-        // ensure an active tab is visible; if current active tab hidden, switch to first allowed
-        const activeBtn = document.querySelector('.tab-btn.active');
+        // ensure an active sidebar item is visible; if current active item hidden, switch to first allowed
+        const activeBtn = document.querySelector('.sidebar-item.active');
         if (!activeBtn || activeBtn.style.display === 'none') {
-            const first = document.querySelector('.tab-btn[style*="display: "]') || document.querySelector('.tab-btn');
-            if (first && first.dataset && first.dataset.tab) switchTab(first.dataset.tab);
+            const first = document.querySelector('.sidebar-item[style*="display: "]') || document.querySelector('.sidebar-item');
+            if (first && first.dataset && first.dataset.view) switchView(first.dataset.view);
+        }
+        
+        // Show admin restock section only for admins
+        const adminRestockSection = document.getElementById('adminRestockSection');
+        if (adminRestockSection) {
+            adminRestockSection.style.display = (currentUser.role === 'admin' || currentUser.role === 'operator') ? 'block' : 'none';
         }
     } else {
         userDisplay.textContent = '';
         loginBtn.style.display = 'inline-block';
         logoutBtn.style.display = 'none';
         if (generateBtn) generateBtn.disabled = true;
-        // hide all tabs until login
-        document.querySelectorAll('.tab-btn').forEach(btn => btn.style.display = 'none');
-        // hide all tab contents
-        tabContents.forEach(c => c.classList.remove('active'));
+        // hide all sidebar items until login
+        document.querySelectorAll('.sidebar-item').forEach(btn => btn.style.display = 'none');
+        // hide all view contents
+        viewContents.forEach(c => c.classList.remove('active'));
         // show login modal
         const loginModal = document.getElementById('loginModal');
         if (loginModal) loginModal.style.display = 'block';
+        
+        // Hide admin sections
+        const adminRestockSection = document.getElementById('adminRestockSection');
+        if (adminRestockSection) {
+            adminRestockSection.style.display = 'none';
+        }
     }
 }
 
@@ -537,12 +575,47 @@ async function loadDashboard() {
 }
 
 // Inventory UI functions
+async function loadInventoryTab() {
+    try {
+        await Promise.all([
+            loadInventoryBalance(),
+            loadLowStock(),
+            loadLedger(),
+            loadRequests(),
+            loadIssueNotes()
+        ]);
+    } catch (e) {
+        console.error('Error loading inventory tab', e);
+    }
+}
+
 async function loadInventoryBalance() {
     try {
         const res = await fetch(`${API_BASE}/inventory/balance`);
         if (!res.ok) return;
         const d = await res.json();
-        document.getElementById('inventoryBalanceTotal').textContent = d.total;
+        const balanceEl = document.getElementById('inventoryBalanceTotal');
+        
+        // Check if user is admin (has officer_stocks array)
+        if (d.officer_stocks !== undefined) {
+            // Admin view - show central stock and all officer stocks
+            let html = `<div style="margin-bottom:12px;"><strong>Central Stock (Admin):</strong> <span style="font-size:18px;font-weight:bold;color:#2980b9;">${d.central_stock}</span></div>`;
+            
+            if (d.officer_stocks && d.officer_stocks.length > 0) {
+                html += `<div style="border-top:1px solid #ddd;padding-top:12px;"><strong>Officer Store Stock:</strong><div style="margin-top:8px;">`;
+                d.officer_stocks.forEach(officer => {
+                    html += `<div style="padding:6px;background:#f5f5f5;margin-bottom:4px;border-radius:4px;display:flex;justify-content:space-between;"><span>${officer.username}</span><strong>${officer.balance}</strong></div>`;
+                });
+                html += `</div></div>`;
+            } else {
+                html += `<div style="border-top:1px solid #ddd;padding-top:12px;"><div style="color:#999;font-size:12px;">No officer stock allocated yet</div></div>`;
+            }
+            
+            balanceEl.innerHTML = html;
+        } else {
+            // Officer view - show only their own balance
+            balanceEl.innerHTML = `<div><strong>Your Store Stock:</strong> <span style="font-size:18px;font-weight:bold;color:#27ae60;">${d.total}</span></div>`;
+        }
     } catch (e) { console.warn('loadInventoryBalance', e); }
 }
 
@@ -571,10 +644,72 @@ async function loadRequests() {
         const res = await fetch(`${API_BASE}/inventory/requests`);
         const rows = await res.json();
         const container = document.getElementById('requestsList');
-        if (!rows || rows.length === 0) { container.innerHTML = '<p class="info-text">No requests</p>'; return; }
-        container.innerHTML = rows.map(r=>{
-            return `<div style="padding:8px;border-bottom:1px solid #eee;"><div><strong>Request #${r.id}</strong> by ${r.requester||'N/A'} — qty ${r.quantity} — status: ${r.status}</div><div class="meta">Needed by: ${r.needed_by||'N/A'}</div><div style="margin-top:6px;display:flex;gap:8px;"><button class="btn" onclick="generateIssue(${r.id})" ${r.status==='approved' || r.status==='partially_approved' ? '' : 'disabled'}>Generate Issue</button><button class="btn" onclick="openDecideModal(${r.id}, '${r.status}', ${r.quantity})">Decide</button></div></div>`;
-        }).join('');
+        if (!rows || rows.length === 0) { 
+            container.innerHTML = '<p class="info-text">No requests</p>'; 
+            return; 
+        }
+        
+        // Determine view based on user role
+        const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'operator');
+        const isOfficer = currentUser && currentUser.role === 'officer';
+        
+        // Officer view - shows their requests with status
+        if (isOfficer) {
+            container.innerHTML = `<div style="padding:12px;background:#f9f9f9;border-radius:6px;">
+                <h4>Your Requests</h4>
+                ${rows.map(r => {
+                    const statusColor = r.status === 'approved' ? '#28a745' : (r.status === 'rejected' ? '#dc3545' : (r.status === 'pending' ? '#ffc107' : '#17a2b8'));
+                    const statusBgColor = r.status === 'approved' ? '#d4edda' : (r.status === 'rejected' ? '#f8d7da' : (r.status === 'pending' ? '#fff3cd' : '#d1ecf1'));
+                    return `<div style="padding:10px;margin:8px 0;border:1px solid #ddd;border-radius:4px;background:${statusBgColor};">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <strong style="font-size:14px;">Request #${r.id}</strong>
+                                <span style="margin-left:12px;color:#666;">Qty: <strong>${r.quantity}</strong></span>
+                                <span style="margin-left:12px;color:#666;">Needed by: <strong>${r.needed_by || 'N/A'}</strong></span>
+                            </div>
+                            <div style="text-align:right;">
+                                <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;">${r.status.toUpperCase()}</span>
+                            </div>
+                        </div>
+                        ${r.reason ? `<div style="margin-top:6px;font-size:12px;color:#666;">Reason: ${r.reason}</div>` : ''}
+                        ${r.approved_qty ? `<div style="margin-top:6px;font-size:12px;color:#666;">Approved Qty: <strong>${r.approved_qty}</strong></div>` : ''}
+                        ${r.decision_note ? `<div style="margin-top:6px;font-size:12px;color:#666;">Decision: ${r.decision_note}</div>` : ''}
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
+        // Admin/Operator view - shows all requests with management options
+        else if (isAdmin) {
+            container.innerHTML = `<div style="padding:12px;">
+                <h4>All Blank Card Requests</h4>
+                ${rows.map(r => {
+                    const statusColor = r.status === 'approved' ? '#28a745' : (r.status === 'rejected' ? '#dc3545' : (r.status === 'pending' ? '#ffc107' : (r.status === 'partially_approved' ? '#17a2b8' : '#999')));
+                    const statusBgColor = r.status === 'approved' ? '#d4edda' : (r.status === 'rejected' ? '#f8d7da' : (r.status === 'pending' ? '#fff3cd' : (r.status === 'partially_approved' ? '#d1ecf1' : '#f0f0f0')));
+                    return `<div style="padding:10px;margin:8px 0;border:1px solid #ddd;border-radius:4px;background:${statusBgColor};">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                            <div style="flex:1;">
+                                <div style="font-weight:bold;">Request #${r.id}</div>
+                                <div style="margin-top:4px;font-size:13px;">
+                                    <span style="color:#666;">By: <strong>${r.requester || 'N/A'}</strong></span>
+                                    <span style="margin-left:12px;color:#666;">Qty: <strong>${r.quantity}</strong></span>
+                                    <span style="margin-left:12px;color:#666;">Needed by: <strong>${r.needed_by || 'N/A'}</strong></span>
+                                </div>
+                                ${r.reason ? `<div style="margin-top:4px;font-size:12px;color:#666;">Reason: ${r.reason}</div>` : ''}
+                                ${r.approved_qty ? `<div style="margin-top:4px;font-size:12px;color:#666;">Approved: <strong>${r.approved_qty}</strong></div>` : ''}
+                                ${r.decision_note ? `<div style="margin-top:4px;font-size:12px;color:#666;">Note: ${r.decision_note}</div>` : ''}
+                            </div>
+                            <div style="text-align:right;">
+                                <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;margin-bottom:8px;">${r.status.toUpperCase()}</span>
+                                <div style="display:flex;gap:4px;flex-direction:column;">
+                                    <button class="btn btn-sm" style="padding:4px 8px;font-size:11px;" onclick="openDecideModal(${r.id}, '${r.status}', ${r.quantity}, '${r.requester || 'N/A'}')" ${r.status === 'pending' ? '' : 'disabled'}>Decide</button>
+                                    <button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:11px;" onclick="generateIssue(${r.id})" ${r.status === 'approved' || r.status === 'partially_approved' ? '' : 'disabled'}>Generate Issue</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
     } catch (e) { console.error('Error loading requests', e); }
 }
 
@@ -588,9 +723,42 @@ window.generateIssue = async function(requestId) {
     } catch (e) { console.error(e); showAlert('Failed to generate issue', 'error'); }
 }
 
-window.openDecideModal = function(id, status, qty) {
+window.openDecideModal = function(id, status, qty, requester) {
+    // Only allow admins/operators to decide
+    if (!currentUser || !(currentUser.role === 'admin' || currentUser.role === 'operator')) {
+        showAlert('Only admins can make decisions on requests', 'error');
+        return;
+    }
+    
     const modal = document.createElement('div'); modal.className='modal'; modal.style.display='block';
-    modal.innerHTML = `<div class="modal-content" style="max-width:480px"><h3>Decide Request #${id}</h3><div>Current status: ${status}</div><label>Action</label><select id="_dec_action"><option value="approve">Approve</option><option value="partial">Partial</option><option value="reject">Reject</option></select><label>Approved Qty (for partial)</label><input id="_dec_qty" type="number" value="${qty}"><label>Decision note</label><input id="_dec_note" type="text"><div style="margin-top:10px;text-align:right"><button id="_dec_cancel" class="btn">Cancel</button><button id="_dec_save" class="btn btn-primary">Save</button></div></div>`;
+    modal.innerHTML = `<div class="modal-content" style="max-width:520px">
+        <h3>Decide Request #${id}</h3>
+        <div style="background:#f9f9f9;padding:10px;border-radius:4px;margin-bottom:12px;">
+            <div><strong>Requester:</strong> ${requester}</div>
+            <div><strong>Quantity Requested:</strong> ${qty}</div>
+            <div><strong>Current Status:</strong> <span style="color:#666;">${status}</span></div>
+        </div>
+        <div style="margin-bottom:12px;">
+            <label style="display:block;margin-bottom:6px;font-weight:bold;">Decision</label>
+            <select id="_dec_action" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+                <option value="approve">✓ Approve (Full)</option>
+                <option value="partial">⚠ Partial Approval</option>
+                <option value="reject">✗ Reject</option>
+            </select>
+        </div>
+        <div style="margin-bottom:12px;">
+            <label style="display:block;margin-bottom:6px;font-weight:bold;">Approved Quantity (for partial)</label>
+            <input id="_dec_qty" type="number" value="${qty}" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+        </div>
+        <div style="margin-bottom:12px;">
+            <label style="display:block;margin-bottom:6px;font-weight:bold;">Decision Note</label>
+            <input id="_dec_note" type="text" placeholder="e.g., In stock, Insufficient stock, etc." style="width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;">
+        </div>
+        <div style="margin-top:14px;text-align:right;display:flex;gap:8px;justify-content:flex-end;">
+            <button id="_dec_cancel" class="btn">Cancel</button>
+            <button id="_dec_save" class="btn btn-primary">Save Decision</button>
+        </div>
+    </div>`;
     document.body.appendChild(modal);
     document.getElementById('_dec_cancel').onclick = ()=>modal.remove();
     document.getElementById('_dec_save').onclick = async ()=>{
@@ -601,7 +769,10 @@ window.openDecideModal = function(id, status, qty) {
             const res = await fetch(`${API_BASE}/inventory/requests/${id}/decide`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ action: action==='approve' ? 'approve' : (action==='partial' ? 'partial' : 'reject'), approved_qty, decision_note }) });
             const d = await res.json();
             if (!res.ok) return showAlert(d.error || 'Failed to decide', 'error');
-            showAlert('Decision recorded', 'success'); modal.remove(); await loadRequests();
+            showAlert('Decision recorded successfully', 'success');
+            modal.remove();
+            // Refresh requests list and inventory balance
+            await Promise.all([loadRequests(), loadInventoryBalance(), loadLedger()]);
         } catch (e) { showAlert('Error recording decision', 'error'); }
     };
 }

@@ -44,7 +44,7 @@ app.use(session({
 }));
 
 // Initialize database
-const db = new sqlite3.Database(DB_PATH, (err) => {
+const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
   if (err) {
     console.error('Error opening database:', err);
   } else {
@@ -167,14 +167,35 @@ function initializeDatabase() {
     // Inventory: stock movements ledger
     db.run(`CREATE TABLE IF NOT EXISTS stock_movements (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL, -- received, issued, adjustment, damaged, lost
+      type TEXT NOT NULL,
       qty INTEGER NOT NULL,
       reference TEXT,
       related_request_id INTEGER,
       operator TEXT,
+      user_id INTEGER,
       notes TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
     )`);
+    
+    // Migration: Add user_id column if it doesn't exist (for existing databases)
+    db.all(`PRAGMA table_info(stock_movements)`, [], (err, rows) => {
+      if (!err && rows) {
+        const hasUserIdColumn = rows.some(col => col.name === 'user_id');
+        if (!hasUserIdColumn) {
+          console.log('Adding user_id column to stock_movements table...');
+          db.run(`ALTER TABLE stock_movements ADD COLUMN user_id INTEGER`, (alterErr) => {
+            if (!alterErr) {
+              console.log('Successfully added user_id column to stock_movements');
+            } else {
+              console.warn('Could not add user_id column:', alterErr.message);
+            }
+          });
+        } else {
+          console.log('user_id column already exists in stock_movements');
+        }
+      }
+    });
 
     // Blank card requests from Store Officer
     db.run(`CREATE TABLE IF NOT EXISTS blank_card_requests (
@@ -450,8 +471,20 @@ app.get('/api/auth/me', (req, res) => {
 // API Routes
 
 // Inventory helpers
-function getCurrentStock(cb) {
-  db.get(`SELECT SUM(qty) as total FROM stock_movements`, [], (err, row) => {
+function getCurrentStock(cb, userId = null) {
+  let query = `SELECT SUM(qty) as total FROM stock_movements`;
+  let params = [];
+  
+  // If userId is 'central' or null, get central/admin stock (WHERE user_id IS NULL)
+  // If userId is a number (officer id), get ONLY that officer's stock (WHERE user_id = ?)
+  if (userId === 'central' || userId === null) {
+    query += ` WHERE user_id IS NULL`;
+  } else if (userId) {
+    query += ` WHERE user_id = ?`;
+    params.push(userId);
+  }
+  
+  db.get(query, params, (err, row) => {
     if (err) return cb(err);
     const total = row && row.total ? Number(row.total) : 0;
     cb(null, total);
@@ -573,7 +606,13 @@ app.post('/api/inventory/receive', requireRole(['officer','operator','admin']), 
   const { qty, reference, notes } = req.body;
   if (!qty || Number(qty) <= 0) return res.status(400).json({ error: 'Quantity required and must be > 0' });
   const q = Number(qty);
-  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, notes) VALUES (?, ?, ?, ?, ?)`, ['received', q, reference || '', req.session.user ? req.session.user.username : 'unknown', notes || ''], function(err) {
+  const userId = req.session.user ? req.session.user.id : null;
+  const userRole = req.session.user ? req.session.user.role : null;
+  
+  // If officer is receiving, add to their inventory; if admin, add to central
+  const ownerUserId = userRole === 'officer' ? userId : null;
+  
+  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['received', q, reference || '', req.session.user ? req.session.user.username : 'unknown', ownerUserId, notes || ''], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     logAudit(null, 'INVENTORY_RECEIVE', null, `+${q} (${reference || ''})`);
     res.json({ success: true, id: this.lastID });
@@ -582,10 +621,41 @@ app.post('/api/inventory/receive', requireRole(['officer','operator','admin']), 
 
 // Get current balance
 app.get('/api/inventory/balance', requireRole(['officer','admin']), (req, res) => {
-  getCurrentStock((err, total) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ total });
-  });
+  const userId = req.session.user ? req.session.user.id : null;
+  const userRole = req.session.user ? req.session.user.role : null;
+  
+  // Officers see only their own inventory
+  if (userRole === 'officer') {
+    getCurrentStock((err, officerBalance) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ 
+        total: officerBalance
+      });
+    }, userId);
+  } else {
+    // Admins see central inventory and all officer inventories
+    getCurrentStock((err, centralBalance) => {
+      if (err) return res.status(500).json({ error: err.message });
+      
+      // Get all officer inventories
+      db.all(`SELECT u.id, u.username, COALESCE(SUM(sm.qty), 0) as balance FROM users u LEFT JOIN stock_movements sm ON u.id = sm.user_id WHERE u.role = 'officer' GROUP BY u.id`, [], (err2, officers) => {
+        if (err2) {
+          console.error('Error fetching officer balances:', err2.message);
+          // Still return central balance even if officer fetch fails
+          return res.json({ 
+            central_stock: centralBalance,
+            officer_stocks: []
+          });
+        }
+        
+        res.json({ 
+          central_stock: centralBalance,
+          total: centralBalance,
+          officer_stocks: officers || []
+        });
+      });
+    }, 'central');
+  }
 });
 
 // Get ledger (movements)
@@ -593,7 +663,24 @@ app.get('/api/inventory/ledger', requireRole(['officer','admin']), (req, res) =>
   const { page = 1, page_size = 100 } = req.query;
   const limit = Math.min(Number(page_size) || 100, 1000);
   const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
-  db.all(`SELECT * FROM stock_movements ORDER BY created_at DESC LIMIT ? OFFSET ?`, [limit, offset], (err, rows) => {
+  
+  const userRole = req.session.user ? req.session.user.role : null;
+  const userId = req.session.user ? req.session.user.id : null;
+  
+  let query = `SELECT * FROM stock_movements`;
+  let params = [];
+  
+  // Officers only see their own movements (where user_id = their id)
+  if (userRole === 'officer') {
+    query += ` WHERE user_id = ?`;
+    params.push(userId);
+  }
+  // Admins see all movements (central + all officers)
+  
+  query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+  
+  db.all(query, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -606,8 +693,11 @@ app.post('/api/inventory/adjust', requireRole(['officer','admin','operator']), (
   const q = Number(qty);
   const allowed = ['adjustment','damaged','lost'];
   if (!type || !allowed.includes(type)) return res.status(400).json({ error: 'Invalid adjustment type' });
+  const userId = req.session.user ? req.session.user.id : null;
+  const userRole = req.session.user ? req.session.user.role : null;
+  const ownerUserId = userRole === 'officer' ? userId : null;
   // store negative qty for damaged/lost/issued types
-  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, notes) VALUES (?, ?, ?, ?, ?)`, [type, q, reference || '', req.session.user ? req.session.user.username : 'unknown', notes || ''], function(err) {
+  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, [type, q, reference || '', req.session.user ? req.session.user.username : 'unknown', ownerUserId, notes || ''], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     logAudit(null, 'INVENTORY_ADJUST', null, `${type} ${q}`);
     res.json({ success: true, id: this.lastID });
@@ -635,9 +725,24 @@ app.post('/api/inventory/requests', requireRole(['officer','admin']), (req, res)
   });
 });
 
-// List requests
-app.get('/api/inventory/requests', requireRole(['operator','admin']), (req, res) => {
-  db.all(`SELECT r.*, u.username as requester FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id ORDER BY r.created_at DESC`, [], (err, rows) => {
+// List requests - officer sees only own, admin/operator see all
+app.get('/api/inventory/requests', requireLogin, (req, res) => {
+  const userRole = req.session.user ? req.session.user.role : null;
+  const userId = req.session.user ? req.session.user.id : null;
+  
+  let query = `SELECT r.*, u.username as requester FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id`;
+  let params = [];
+  
+  // Officer can only see their own requests
+  if (userRole === 'officer') {
+    query += ` WHERE r.requester_id = ?`;
+    params.push(userId);
+  }
+  // Admin and operator see all requests
+  
+  query += ` ORDER BY r.created_at DESC`;
+  
+  db.all(query, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -658,11 +763,64 @@ app.post('/api/inventory/requests/:id/decide', requireRole(['operator','admin'])
     if (action === 'partial') { status = 'partially_approved'; approved = Number(approved_qty) || 0; }
     if (action === 'reject') { status = 'rejected'; approved = 0; }
 
-    db.run(`UPDATE blank_card_requests SET status = ?, approved_qty = ?, approver_id = ?, decision_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [status, approved, approver_id, decision_note || '', id], function(err2) {
-      if (err2) return res.status(500).json({ error: err2.message });
-      logAudit(null, 'REQUEST_DECIDED', reqRow.status, `${status} qty ${approved}`);
-      res.json({ success: true, status, approved_qty: approved });
-    });
+    // If approving, check central stock availability
+    if ((action === 'approve' || action === 'partial') && approved > 0) {
+      getCurrentStock((err_stock, centralStock) => {
+        if (err_stock) return res.status(500).json({ error: 'Failed to check inventory' });
+        
+        // Check if we have enough central stock
+        if (centralStock < approved) {
+          return res.status(400).json({ error: `Insufficient central stock. Available: ${centralStock}, Requested: ${approved}` });
+        }
+        
+        // Proceed with approval
+        proceedWithApproval();
+      }, 'central');
+    } else {
+      // For rejections, proceed without stock check
+      proceedWithApproval();
+    }
+    
+    function proceedWithApproval() {
+      db.run(`UPDATE blank_card_requests SET status = ?, approved_qty = ?, approver_id = ?, decision_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [status, approved, approver_id, decision_note || '', id], function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        logAudit(null, 'REQUEST_DECIDED', reqRow.status, `${status} qty ${approved}`);
+        
+        // If approved (full or partial), create TWO stock movements:
+        // 1. Deduct from central/admin inventory (user_id = NULL)
+        // 2. Add to officer's inventory (user_id = requester_id)
+        if ((action === 'approve' || action === 'partial') && approved > 0) {
+          const requesterUserId = reqRow.requester_id;
+          
+          // Movement 1: Deduct from central inventory
+          db.run(
+            `INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+            ['issued', -approved, `Blank Card Request #${id}`, approver_id, null, `Approved blank card request for officer #${requesterUserId}`],
+            (err3) => {
+              if (err3) {
+                console.error('Error creating central stock movement:', err3.message);
+                return res.status(500).json({ error: 'Failed to update inventory' });
+              }
+              
+              // Movement 2: Add to officer's inventory
+              db.run(
+                `INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                ['received', approved, `Blank Card Request #${id}`, approver_id, requesterUserId, `Received from blank card request approval`],
+                (err4) => {
+                  if (err4) {
+                    console.error('Error creating officer stock movement:', err4.message);
+                    return res.status(500).json({ error: 'Failed to update officer inventory' });
+                  }
+                  res.json({ success: true, status, approved_qty: approved });
+                }
+              );
+            }
+          );
+        } else {
+          res.json({ success: true, status, approved_qty: approved });
+        }
+      });
+    }
   });
 });
 
@@ -720,7 +878,8 @@ app.post('/api/inventory/issue/:issueId/sign', requireLogin, (req, res) => {
         if (!err3 && uissue && uissue.issuer_name && uissue.receiver_name && uissue.status !== 'completed') {
           // mark completed and add qty to stock_movements (store receives the approved qty)
           db.run(`UPDATE issue_notes SET status = 'completed' WHERE id = ?`, [issueId]);
-          db.run(`INSERT INTO stock_movements (type, qty, reference, related_request_id, operator, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['received_from_issue', uissue.quantity, `issue_${issueId}`, uissue.request_id, req.session.user ? req.session.user.username : 'system', 'Received via issue note'], function(err4) {
+          const issueUserId = uissue.requester_id || null;
+          db.run(`INSERT INTO stock_movements (type, qty, reference, related_request_id, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?)`, ['received_from_issue', uissue.quantity, `issue_${issueId}`, uissue.request_id, req.session.user ? req.session.user.username : 'system', issueUserId, 'Received via issue note'], function(err4) {
             if (err4) console.error('Error adding stock from issue:', err4);
             // update request status if needed
             db.run(`UPDATE blank_card_requests SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [uissue.request_id]);
@@ -738,17 +897,27 @@ app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin']), (req
   const { qty, issued_to, reference, notes } = req.body;
   if (!qty || Number(qty) <= 0) return res.status(400).json({ error: 'Quantity required' });
   const q = Number(qty);
-  // check stock
+  
+  const userId = req.session.user ? req.session.user.id : null;
+  const userRole = req.session.user ? req.session.user.role : null;
+  
+  // Get the appropriate balance to check
+  const checkUserId = userRole === 'officer' ? userId : 'central';
+  
   getCurrentStock((err, total) => {
     if (err) return res.status(500).json({ error: err.message });
     if (total < q) return res.status(400).json({ error: 'Insufficient stock' });
+    
+    // Determine which user_id to deduct from
+    const deductUserId = userRole === 'officer' ? userId : null;
+    
     // record movement as negative qty
-    db.run(`INSERT INTO stock_movements (type, qty, reference, operator, notes) VALUES (?, ?, ?, ?, ?)`, ['issued', -q, reference || issued_to || '', req.session.user ? req.session.user.username : 'unknown', notes || 'Issued to personalization'], function(err2) {
+    db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['issued', -q, reference || issued_to || '', req.session.user ? req.session.user.username : 'unknown', deductUserId, notes || 'Issued to personalization'], function(err2) {
       if (err2) return res.status(500).json({ error: err2.message });
       logAudit(null, 'INVENTORY_ISSUED', null, `-${q} to ${issued_to || reference || ''}`);
       res.json({ success: true, id: this.lastID });
     });
-  });
+  }, checkUserId);
 });
 
 // Reconciliation view: opening + received - issued - damaged/lost = expected
