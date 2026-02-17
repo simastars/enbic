@@ -59,6 +59,21 @@ const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READWRITE | sqlite3.OPEN_C
   }
 });
 
+// ensure dispatch_batches table has optional batch_arn column for single-ARN batches
+db.serialize(() => {
+  db.all(`PRAGMA table_info(dispatch_batches)`, [], (err, cols) => {
+    if (!err && cols) {
+      const names = cols.map(c => c.name);
+      if (!names.includes('batch_arn')) {
+        console.log('Adding batch_arn column to dispatch_batches...');
+        db.run(`ALTER TABLE dispatch_batches ADD COLUMN batch_arn TEXT`, (alterErr) => {
+          if (alterErr) console.warn('Could not add batch_arn column:', alterErr.message);
+        });
+      }
+    }
+  });
+});
+
 // Initialize database schema
 function initializeDatabase() {
   db.serialize(() => {
@@ -73,6 +88,7 @@ function initializeDatabase() {
     db.run(`CREATE TABLE IF NOT EXISTS arns (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       arn TEXT UNIQUE NOT NULL,
+      name TEXT,
       state TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'Awaiting Capture',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -124,6 +140,7 @@ function initializeDatabase() {
       state TEXT NOT NULL,
       card_count INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      batch_arn TEXT,
       operator_name TEXT,
       operator_signed_at DATETIME,
       officer_name TEXT,
@@ -258,6 +275,14 @@ db.serialize(() => {
         }
         if (!names.includes('collected_info')) {
           db.run(`ALTER TABLE arns ADD COLUMN collected_info TEXT`);
+        }
+        // add optional name column if missing
+        if (!names.includes('name')) {
+          db.run(`ALTER TABLE arns ADD COLUMN name TEXT`);
+        }
+        // add delivery note path column if missing
+        if (!names.includes('delivery_note_path')) {
+          db.run(`ALTER TABLE arns ADD COLUMN delivery_note_path TEXT`);
         }
       }
     });
@@ -984,7 +1009,7 @@ app.get('/api/arns/:arn', (req, res) => {
 
 // Add new ARN
 app.post('/api/arns', requireRole(['operator','admin']), (req, res) => {
-  const { arn, state } = req.body;
+  const { arn, state, name } = req.body;
 
   if (!arn || !state) {
     return res.status(400).json({ error: 'ARN and state are required' });
@@ -999,14 +1024,14 @@ app.post('/api/arns', requireRole(['operator','admin']), (req, res) => {
     }
 
     db.run(
-      `INSERT INTO arns (arn, state, status) VALUES (?, ?, 'Awaiting Capture')`,
-      [arn, state],
+      `INSERT INTO arns (arn, state, name, status) VALUES (?, ?, ?, 'Awaiting Capture')`,
+      [arn, state, name || null],
       function(err) {
         if (err) {
           res.status(500).json({ error: err.message });
         } else {
-          logAudit(arn, 'ARN_CREATED', null, `State: ${state}`);
-          res.json({ id: this.lastID, arn, state, status: 'Awaiting Capture' });
+          logAudit(arn, 'ARN_CREATED', null, `State: ${state}${name ? `, Name: ${name}` : ''}`);
+          res.json({ id: this.lastID, arn, state, name: name || null, status: 'Awaiting Capture' });
           // Trigger reminders generation for the newly added ARN (non-blocking)
           try {
             generateRemindersInDB();
@@ -1131,10 +1156,10 @@ app.post('/api/delivery/confirm', requireRole(['operator','admin','supervisor'])
 
 // Dispatch batches: create batch (server-side)
 app.post('/api/dispatch/batches', requireRole(['operator','admin']), (req, res) => {
-  const { batchId, state, cardCount } = req.body;
+  const { batchId, state, cardCount, batchArn } = req.body;
   if (!batchId || !state) return res.status(400).json({ error: 'batchId and state required' });
 
-  db.run(`INSERT INTO dispatch_batches (batch_id, state, card_count) VALUES (?, ?, ?)`, [batchId, state, cardCount || 0], function(err) {
+  db.run(`INSERT INTO dispatch_batches (batch_id, state, card_count, batch_arn) VALUES (?, ?, ?, ?)`, [batchId, state, cardCount || 0, batchArn || null], function(err) {
     if (err) {
       if (err.message && err.message.includes('UNIQUE')) return res.status(409).json({ error: 'Batch already exists' });
       return res.status(500).json({ error: err.message });
@@ -1238,32 +1263,54 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
     const savedPath = saveDataUrlToFile(fileData, `confirmation_${batchId}`);
     if (!savedPath) return res.status(500).json({ error: 'Failed to save confirmation file' });
 
-    // mark ARNs delivered for the state and log delivery history
-    db.all('SELECT arn FROM arns WHERE state = ? AND status = ?', [batch.state, 'Pending Delivery'], (err2, rows) => {
-      if (err2) return res.status(500).json({ error: err2.message });
-      const arns = rows.map(r => r.arn);
-      const arnCount = arns.length;
+    // mark ARNs delivered for this batch (single-ARN batch or state batch)
+    if (batch.batch_arn) {
+      // single ARN
+      const theArn = batch.batch_arn;
+      db.get('SELECT * FROM arns WHERE arn = ? AND status = ?', [theArn, 'Pending Delivery'], (err2, row) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+        const arnCount = row ? 1 : 0;
+        if (arnCount > 0) {
+          db.run(`UPDATE arns SET status = 'Delivered', delivered_at = CURRENT_TIMESTAMP WHERE arn = ?`, [theArn], function(err3) {
+            if (err3) console.error('Error marking ARN delivered:', err3);
+          });
+          db.run(`INSERT INTO delivery_history (state, arn_count, operator_notes) VALUES (?, ?, ?)`, [batch.state, arnCount, 'Delivered via dispatch confirmation'], (err4) => { if (err4) console.error('Error logging delivery history:', err4); });
+        }
 
-      if (arnCount > 0) {
-        const placeholders = arns.map(() => '?').join(',');
-        db.run(`UPDATE arns SET status = 'Delivered', delivered_at = CURRENT_TIMESTAMP WHERE arn IN (${placeholders})`, arns, function(err3) {
-          if (err3) console.error('Error marking ARNs delivered:', err3);
+        db.run(`UPDATE dispatch_batches SET confirmation_note_path = ?, delivered_at = CURRENT_TIMESTAMP, status = 'delivered' WHERE batch_id = ?`, [savedPath, batchId], function(err5) {
+          if (err5) return res.status(500).json({ error: err5.message });
+          if (arnCount > 0) logAudit(theArn, 'DELIVERED_VIA_DISPATCH', 'Pending Delivery', `Delivered (Batch: ${batchId})`);
+          res.json({ success: true, count: arnCount });
         });
+      });
+    } else {
+      // state-level batch (existing behavior)
+      db.all('SELECT arn FROM arns WHERE state = ? AND status = ?', [batch.state, 'Pending Delivery'], (err2, rows) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+        const arns = rows.map(r => r.arn);
+        const arnCount = arns.length;
 
-        db.run(`INSERT INTO delivery_history (state, arn_count, operator_notes) VALUES (?, ?, ?)`, [batch.state, arnCount, 'Delivered via dispatch confirmation'], (err4) => {
-          if (err4) console.error('Error logging delivery history:', err4);
+        if (arnCount > 0) {
+          const placeholders = arns.map(() => '?').join(',');
+          db.run(`UPDATE arns SET status = 'Delivered', delivered_at = CURRENT_TIMESTAMP WHERE arn IN (${placeholders})`, arns, function(err3) {
+            if (err3) console.error('Error marking ARNs delivered:', err3);
+          });
+
+          db.run(`INSERT INTO delivery_history (state, arn_count, operator_notes) VALUES (?, ?, ?)`, [batch.state, arnCount, 'Delivered via dispatch confirmation'], (err4) => {
+            if (err4) console.error('Error logging delivery history:', err4);
+          });
+        }
+
+        db.run(`UPDATE dispatch_batches SET confirmation_note_path = ?, delivered_at = CURRENT_TIMESTAMP, status = 'delivered' WHERE batch_id = ?`, [savedPath, batchId], function(err5) {
+          if (err5) return res.status(500).json({ error: err5.message });
+          // log audit entries
+          arns.forEach(a => logAudit(a, 'BULK_DELIVERED_VIA_DISPATCH', 'Pending Delivery', `Delivered (Batch: ${batchId})`));
+          res.json({ success: true, count: arnCount });
         });
-      }
-
-      db.run(`UPDATE dispatch_batches SET confirmation_note_path = ?, delivered_at = CURRENT_TIMESTAMP, status = 'delivered' WHERE batch_id = ?`, [savedPath, batchId], function(err5) {
-        if (err5) return res.status(500).json({ error: err5.message });
-        // log audit entries
-        arns.forEach(a => logAudit(a, 'BULK_DELIVERED_VIA_DISPATCH', 'Pending Delivery', `Delivered (Batch: ${batchId})`));
-        res.json({ success: true, count: arnCount });
       });
-      });
+    }
     });
-  });
+  }); 
 
 // Generate delivery note for a batch (server-side) and save file
     app.post('/api/dispatch/:batchId/generate-note', requireRole(['operator','admin']), (req, res) => {
@@ -1272,13 +1319,11 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
         if (err) return res.status(500).json({ error: err.message });
         if (!batch) return res.status(404).json({ error: 'Batch not found' });
 
-        // fetch ARNs for the state that are pending delivery
-        db.all('SELECT arn, state, status, created_at FROM arns WHERE state = ? AND status = ?', [batch.state, 'Pending Delivery'], (err2, rows) => {
-          if (err2) return res.status(500).json({ error: err2.message });
-
+        // fetch ARNs for this batch. If batch_arn is set, use that single ARN; else fetch all pending in the state
+        const buildHtmlForRows = (rows) => {
           const title = `Delivery Note - ${batch.state}`;
           const signInfo = `Operator: ${batch.operator_name || 'N/A'}\nStore Officer: ${batch.officer_name || 'N/A'}`;
-          const rowsHtml = (rows || []).map(a => `<tr><td>${a.arn}</td><td>${a.state}</td><td>${a.status}</td><td>${a.created_at ? a.created_at : ''}</td></tr>`).join('');
+          const rowsHtml = (rows || []).map(a => `<tr><td>${a.arn}</td><td>${a.name || ''}</td><td>${a.state}</td><td>${a.status}</td><td>${a.created_at ? a.created_at : ''}</td></tr>`).join('');
           const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
             <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
             </head><body>
@@ -1287,23 +1332,43 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
             <div><strong>Created:</strong> ${batch.created_at}</div>
             <div style="margin-top:8px">${signInfo}</div>
             <div style="margin-top:12px"><strong>Card Count:</strong> ${batch.card_count}</div>
-            <table><thead><tr><th>ARN</th><th>State</th><th>Status</th><th>Created</th></tr></thead><tbody>
+            <table><thead><tr><th>ARN</th><th>Name</th><th>State</th><th>Status</th><th>Created</th></tr></thead><tbody>
             ${rowsHtml}
             </tbody></table>
             <div style="margin-top:18px;font-size:12px;color:#666">Generated by ENBIC Tracking System</div>
             </body></html>`;
+          return html;
+        };
 
-          // save html to file
-          const filename = `batch_${batchId}_delivery_note_${Date.now()}.html`;
-          const filePath = path.join(DISPATCH_NOTES_DIR, filename);
-          fs.writeFile(filePath, html, (err3) => {
-            if (err3) return res.status(500).json({ error: err3.message });
-            db.run(`UPDATE dispatch_batches SET delivery_note_path = ? WHERE batch_id = ?`, [filePath, batchId], function(err4) {
-              if (err4) return res.status(500).json({ error: err4.message });
-              res.json({ success: true, path: filePath });
+        if (batch.batch_arn) {
+          db.get('SELECT arn, name, state, status, created_at FROM arns WHERE arn = ?', [batch.batch_arn], (err2, row) => {
+            if (err2) return res.status(500).json({ error: err2.message });
+            const html = buildHtmlForRows(row ? [row] : []);
+            const filename = `batch_${batchId}_delivery_note_${Date.now()}.html`;
+            const filePath = path.join(DISPATCH_NOTES_DIR, filename);
+            fs.writeFile(filePath, html, (err3) => {
+              if (err3) return res.status(500).json({ error: err3.message });
+              db.run(`UPDATE dispatch_batches SET delivery_note_path = ? WHERE batch_id = ?`, [filePath, batchId], function(err4) {
+                if (err4) return res.status(500).json({ error: err4.message });
+                res.json({ success: true, path: filePath });
+              });
             });
           });
-        });
+        } else {
+          db.all('SELECT arn, name, state, status, created_at FROM arns WHERE state = ? AND status = ?', [batch.state, 'Pending Delivery'], (err2, rows) => {
+            if (err2) return res.status(500).json({ error: err2.message });
+            const html = buildHtmlForRows(rows);
+            const filename = `batch_${batchId}_delivery_note_${Date.now()}.html`;
+            const filePath = path.join(DISPATCH_NOTES_DIR, filename);
+            fs.writeFile(filePath, html, (err3) => {
+              if (err3) return res.status(500).json({ error: err3.message });
+              db.run(`UPDATE dispatch_batches SET delivery_note_path = ? WHERE batch_id = ?`, [filePath, batchId], function(err4) {
+                if (err4) return res.status(500).json({ error: err4.message });
+                res.json({ success: true, path: filePath });
+              });
+            });
+          });
+        }
       });
     });
 
@@ -1319,10 +1384,64 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
     });
   });
 
+  // Generate delivery note for a single ARN (server-side) and save file
+  app.post('/api/arns/:arn/generate-note', requireRole(['operator','admin']), (req, res) => {
+    const arnParam = req.params.arn;
+    const force = req.query.force === 'true' || req.body.force === true;
+
+    db.get(`SELECT * FROM arns WHERE arn = ?`, [arnParam], (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!row) return res.status(404).json({ error: 'ARN not found' });
+
+      if (row.delivery_note_path && !force) {
+        return res.status(409).json({ error: 'Delivery note already generated for this ARN' });
+      }
+
+      const esc = (s) => (s === null || s === undefined) ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+      const title = `Delivery Note - ${esc(row.state)} - ${esc(arnParam)}`;
+      const signInfo = `Generated by ENBIC Tracking System`;
+      const nameLine = row.name ? `<div><strong>Name:</strong> ${esc(row.name)}</div>` : '';
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+        <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
+        </head><body>
+        <h1>${title}</h1>
+        <div><strong>ARN:</strong> ${arnParam}</div>
+        ${nameLine}
+        <div><strong>State:</strong> ${row.state}</div>
+        <div style="margin-top:8px">${signInfo}</div>
+        <div style="margin-top:18px;font-size:12px;color:#666">Generated: ${moment().format('YYYY-MM-DD HH:mm:ss')}</div>
+        </body></html>`;
+
+      const filename = `delivery_note_${arnParam.replace(/[^a-zA-Z0-9_-]/g, '')}_${Date.now()}.html`;
+      const filePath = path.join(DISPATCH_NOTES_DIR, filename);
+
+      fs.writeFile(filePath, html, (err2) => {
+        if (err2) return res.status(500).json({ error: 'Failed to save delivery note' });
+
+        db.run(`UPDATE arns SET delivery_note_path = ? WHERE arn = ?`, [filePath, arnParam], function(err3) {
+          if (err3) return res.status(500).json({ error: err3.message });
+          logAudit(arnParam, 'DELIVERY_NOTE_GENERATED', null, filePath);
+          res.json({ success: true, path: filePath });
+        });
+      });
+    });
+  });
+
+  // Serve per-ARN delivery note file
+  app.get('/api/arns/:arn/delivery-note', requireLogin, (req, res) => {
+    const arnParam = req.params.arn;
+    db.get(`SELECT delivery_note_path FROM arns WHERE arn = ?`, [arnParam], (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!row) return res.status(404).json({ error: 'ARN not found' });
+      if (!row.delivery_note_path) return res.status(404).json({ error: 'Delivery note not found' });
+      res.sendFile(row.delivery_note_path);
+    });
+  });
+
 // Get reminders
 app.get('/api/reminders', requireRole(['operator','admin','supervisor']), (req, res) => {
   const query = `
-    SELECT r.*, a.state, a.status 
+    SELECT r.*, a.state, a.status, a.name as arn_name
     FROM reminders r
     JOIN arns a ON r.arn = a.arn
     WHERE r.resolved_at IS NULL

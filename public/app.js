@@ -47,12 +47,18 @@ function switchView(viewName) {
 }
 
 function setupEventListeners() {
+    // Unlock audio on first user interaction to satisfy browser autoplay policies
+    try {
+        document.addEventListener('click', _unlockAudioOnInteraction, { once: true });
+        document.addEventListener('keydown', _unlockAudioOnInteraction, { once: true });
+    } catch (e) {}
     // Add ARN form
     const addArnForm = document.getElementById('addArnForm');
     if (addArnForm) {
         addArnForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const arn = document.getElementById('arnInput').value.trim();
+            const name = (document.getElementById('arnNameInput') && document.getElementById('arnNameInput').value.trim()) || null;
             const state = document.getElementById('stateSelect').value;
 
             if (!arn || !state) {
@@ -64,7 +70,7 @@ function setupEventListeners() {
                 const response = await fetch(`${API_BASE}/arns`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ arn, state })
+                    body: JSON.stringify({ arn, state, name })
                 });
 
                 const data = await response.json();
@@ -72,6 +78,7 @@ function setupEventListeners() {
                 if (response.ok) {
                     showAlert('ARN added successfully', 'success');
                     document.getElementById('arnInput').value = '';
+                    if (document.getElementById('arnNameInput')) document.getElementById('arnNameInput').value = '';
                     document.getElementById('stateSelect').value = '';
                     await Promise.all([loadARNs(), loadDashboardStats(), loadReminders()]);
                 } else {
@@ -425,6 +432,8 @@ function updateAuthUI() {
     const viewContents = Array.from(document.querySelectorAll('.view-content'));
 
     if (currentUser) {
+        // start polling reminders for logged-in users
+        startRemindersPolling();
         userDisplay.textContent = `${currentUser.username} (${currentUser.role})`;
         loginBtn.style.display = 'none';
         logoutBtn.style.display = 'inline-block';
@@ -449,6 +458,10 @@ function updateAuthUI() {
             adminRestockSection.style.display = (currentUser.role === 'admin' || currentUser.role === 'operator') ? 'block' : 'none';
         }
     } else {
+        // stop polling and any active reminder UI when logged out
+        stopRemindersPolling();
+        stopReminderAlerts();
+        hideEnableRemindersBanner();
         userDisplay.textContent = '';
         loginBtn.style.display = 'inline-block';
         logoutBtn.style.display = 'none';
@@ -821,22 +834,66 @@ async function loadReminders() {
         const reminders = await response.json();
 
         const container = document.getElementById('remindersList');
-        if (reminders.length === 0) {
+        // exclude delivered reminders
+        const active = (reminders || []).filter(r => (r.status || '').toLowerCase() !== 'delivered');
+        if (active.length === 0) {
             container.innerHTML = '<p class="info-text">No active reminders</p>';
             return;
         }
 
-        container.innerHTML = reminders.map(reminder => `
-            <div class="reminder-item">
-                <div class="message">
-                    <strong>${reminder.arn}</strong> - ${reminder.message}
-                    <div class="meta">State: ${reminder.state} | Status: ${reminder.status}</div>
+        // group by status
+        const groups = {};
+        active.forEach(r => {
+            const s = r.status || 'Unknown';
+            if (!groups[s]) groups[s] = [];
+            groups[s].push(r);
+        });
+
+        // create UI: ribbon per status with count and expandable list
+        const html = Object.keys(groups).map(status => {
+            const items = groups[status];
+            const id = `rem-group-${status.replace(/\s+/g,'-')}`;
+            return `
+                <div class="reminder-group">
+                    <div class="reminder-group-header" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="(function(){const el=document.getElementById('${id}'); el.style.display = el.style.display === 'none' ? 'block' : 'none';})()">
+                        <div><strong>${status}</strong></div>
+                        <div style="background:#eee;padding:6px 10px;border-radius:16px;">${items.length}</div>
+                    </div>
+                    <div id="${id}" class="reminder-group-list" style="display:none;margin-top:8px;">
+                        ${items.map(r => `
+                            <div class="reminder-item">
+                                <div class="message">
+                                    <strong>${r.arn}</strong>${r.arn_name ? ' — ' + escapeHtml(r.arn_name) : ''} - ${escapeHtml(r.message)}
+                                    <div class="meta">State: ${r.state || ''} | Status: ${r.status || ''}</div>
+                                </div>
+                                <div class="actions">
+                                    <button class="btn btn-success" onclick="resolveReminder(${r.id})">Resolve</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
                 </div>
-                <div class="actions">
-                    <button class="btn btn-success" onclick="resolveReminder(${reminder.id})">Resolve</button>
-                </div>
-            </div>
-        `).join('');
+            `;
+        }).join('');
+
+        container.innerHTML = html;
+
+        // If there are reminders waiting to be submitted to personalization (awaiting capture), alert the operator every 4 minutes
+        const hasWaitingToSubmit = active.some(r => (r.reminder_type === 'pending_capture') || ((r.status||'').toLowerCase() === 'awaiting capture'));
+        const isOperator = currentUser && String(currentUser.role || '').toLowerCase() === 'operator';
+        if (hasWaitingToSubmit && isOperator) {
+            // If audio has been unlocked previously, start alerts automatically; otherwise show a banner prompting the user to enable sound
+            if (_audioUnlocked) {
+                startReminderAlerts();
+            } else {
+                // still start visual/flash, but show banner so user can enable sound
+                startReminderAlerts();
+                showEnableRemindersBanner();
+            }
+        } else {
+            stopReminderAlerts();
+            hideEnableRemindersBanner();
+        }
     } catch (error) {
         console.error('Error loading reminders:', error);
     }
@@ -911,6 +968,7 @@ async function loadARNs() {
                 <div class="arn-item ${statusBadgeClass}">
                     <div class="arn-info">
                         <strong>${arn.arn}</strong>
+                        ${arn.name ? `<div style="margin-top:6px;color:#333;">Name: <strong>${escapeHtml(arn.name)}</strong></div>` : ''}
                         <div class="meta">
                             State: ${arn.state} | 
                             <span class="status-badge ${statusBadgeClass}">${arn.status}</span>
@@ -988,8 +1046,13 @@ async function loadPendingDeliveries() {
                 <h3>${state} (${stateArns.length} ARN${stateArns.length > 1 ? 's' : ''})</h3>
                 <div style="margin-top: 10px;">
                     ${stateArns.map(arn => `
-                        <div style="padding: 5px 0; border-bottom: 1px solid #eee;">
-                            <strong>${arn.arn}</strong> - Pending since ${formatDate(arn.pending_delivery_at)}
+                        <div style="padding: 5px 0; border-bottom: 1px solid #eee; display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <strong>${arn.arn}</strong>${arn.name ? ' — ' + escapeHtml(arn.name) : ''} <span style="color:#666">- Pending since ${formatDate(arn.pending_delivery_at)}</span>
+                            </div>
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                ${arn.delivery_note_path ? `<button class="btn" onclick="viewArnDeliveryNote('${arn.arn}')">View Note</button><button class="btn btn-secondary" onclick="regenerateArnDeliveryNote('${arn.arn}')">Regenerate</button>` : `<button class="btn btn-primary" onclick="generateArnDeliveryNote('${arn.arn}')">Generate Note</button>`}
+                            </div>
                         </div>
                     `).join('')}
                 </div>
@@ -1026,6 +1089,69 @@ async function prepareDispatch(state, cardCount) {
         showAlert('Delivery note prepared (server) for ' + state, 'success');
         await renderDispatchBatches();
     } catch (e) { console.error(e); showAlert('Failed to create batch', 'error'); }
+}
+
+// Generate delivery note for a single ARN
+async function generateArnDeliveryNote(arn) {
+    if (!confirm(`Generate delivery note for ${arn}?`)) return;
+    try {
+        // create a single-ARN dispatch batch so it follows the same signing/confirm flow
+        const arnRes = await fetch(`${API_BASE}/arns/${encodeURIComponent(arn)}`);
+        if (!arnRes.ok) return showAlert('Failed to fetch ARN details', 'error');
+        const arnData = await arnRes.json();
+        const batchId = `batch-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+        const createRes = await fetch(`${API_BASE}/dispatch/batches`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ batchId, state: arnData.state, cardCount: 1, batchArn: arn }) });
+        const createData = await createRes.json().catch(()=>({}));
+        if (!createRes.ok) return showAlert(createData.error || 'Failed to create dispatch batch for ARN', 'error');
+        showAlert('Dispatch batch created for ARN. Signatures required to generate delivery note.', 'success');
+        // refresh dispatch batches and pending deliveries
+        await Promise.all([renderDispatchBatches(), loadPendingDeliveries()]);
+    } catch (e) { console.error(e); showAlert('Error generating delivery note', 'error'); }
+}
+
+async function regenerateArnDeliveryNote(arn) {
+    if (!confirm(`Regenerate delivery note for ${arn}? Only do this if the first generation failed.`)) return;
+    try {
+        // prefer regenerating via dispatch batch if one exists for this ARN
+        const batches = await fetchDispatchBatches();
+        const batch = batches.find(b => b.batch_arn === arn);
+        if (batch) {
+            const res = await fetch(`${API_BASE}/dispatch/${batch.batch_id}/generate-note`, { method: 'POST' });
+            const d = await res.json().catch(()=>({}));
+            if (!res.ok) return showAlert(d.error || 'Failed to regenerate delivery note (batch)', 'error');
+            showAlert('Delivery note regenerated (batch)', 'success');
+            await renderDispatchBatches();
+            return;
+        }
+
+        // fallback to direct per-ARN regeneration
+        const res = await fetch(`${API_BASE}/arns/${encodeURIComponent(arn)}/generate-note?force=true`, { method: 'POST' });
+        const d = await res.json().catch(()=>({}));
+        if (!res.ok) return showAlert(d.error || 'Failed to regenerate delivery note', 'error');
+        showAlert('Delivery note regenerated', 'success');
+        await loadPendingDeliveries();
+    } catch (e) { console.error(e); showAlert('Error regenerating delivery note', 'error'); }
+}
+
+function viewArnDeliveryNote(arn) {
+    // open in new tab
+    (async () => {
+        try {
+            // check per-ARN note
+            const res = await fetch(`${API_BASE}/arns/${encodeURIComponent(arn)}`);
+            if (!res.ok) return showAlert('Failed to find delivery note', 'error');
+            const data = await res.json();
+            if (data.delivery_note_path) {
+                window.open(`${API_BASE}/arns/${encodeURIComponent(arn)}/delivery-note`, '_blank');
+                return;
+            }
+            // else find batch for this arn
+            const batches = await fetchDispatchBatches();
+            const batch = batches.find(b => b.batch_arn === arn);
+            if (!batch) return showAlert('No delivery note found for this ARN', 'error');
+            window.open(`${API_BASE}/dispatch/${batch.batch_id}/file/delivery`, '_blank');
+        } catch (e) { console.error(e); showAlert('Error opening delivery note', 'error'); }
+    })();
 }
 
 async function openDeliveryNoteModal(batchId, signer) {
@@ -1135,7 +1261,7 @@ async function renderDispatchBatches() {
         return `
         <div class="pending-delivery-item" style="display:flex;flex-direction:column;gap:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div><strong>${b.state}</strong> — ${b.card_count} card(s)</div>
+                <div>${b.batch_arn ? `<strong>ARN:</strong> ${escapeHtml(b.batch_arn)}` : `<strong>${b.state}</strong> — ${b.card_count} card(s)`}</div>
                 <div style="font-size:12px;color:#666">Created: ${new Date(b.created_at).toLocaleString()}</div>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
@@ -1327,17 +1453,188 @@ function formatDate(dateString) {
     return date.toLocaleString();
 }
 
-function showAlert(message, type) {
-    const alert = document.createElement('div');
-    alert.className = `alert alert-${type}`;
-    alert.textContent = message;
-    
-    const container = document.querySelector('.container');
-    container.insertBefore(alert, container.firstChild);
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
 
-    setTimeout(() => {
-        alert.remove();
-    }, 5000);
+// Reminder alert/flash controls
+let _reminderAlertInterval = null;
+let _reminderFlashTimeout = null;
+let _sharedAudioCtx = null;
+let _audioUnlocked = false;
+let _remindersPollInterval = null;
+
+function playReminderBeep(duration = 700, frequency = 880) {
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+
+        // prefer shared unlocked context
+        let ctx = _sharedAudioCtx;
+        if (!ctx) {
+            try {
+                ctx = new AudioCtx();
+                _sharedAudioCtx = ctx;
+            } catch (e) {
+                // cannot create audio context
+                return;
+            }
+        }
+
+        // If not unlocked yet, attempt to resume (may require user gesture)
+        if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+            ctx.resume().then(() => { _audioUnlocked = true; }).catch(() => { _audioUnlocked = false; });
+        }
+
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = frequency;
+        g.gain.value = 0.0001;
+        o.connect(g);
+        g.connect(ctx.destination);
+        const now = ctx.currentTime;
+        g.gain.exponentialRampToValueAtTime(0.15, now + 0.02);
+        o.start(now);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + (duration / 1000));
+        setTimeout(() => {
+            try { o.stop(); } catch (e) {}
+        }, duration + 100);
+    } catch (e) {
+        console.warn('playReminderBeep failed', e);
+    }
+}
+
+function _unlockAudioOnInteraction() {
+    if (_audioUnlocked) return;
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        if (!_sharedAudioCtx) _sharedAudioCtx = new AudioCtx();
+        if (_sharedAudioCtx.state === 'suspended' && typeof _sharedAudioCtx.resume === 'function') {
+            _sharedAudioCtx.resume().then(() => { _audioUnlocked = true; }).catch(() => {});
+        } else {
+            _audioUnlocked = true;
+        }
+    } catch (e) {}
+}
+
+function startRemindersPolling() {
+    try {
+        if (_remindersPollInterval) return;
+        // poll reminders every 30s to ensure alerts resume after refresh/login
+        _remindersPollInterval = setInterval(() => {
+            try { loadReminders(); } catch (e) { console.warn('reminders poll failed', e); }
+        }, 30 * 1000);
+    } catch (e) { console.warn('startRemindersPolling failed', e); }
+}
+
+function stopRemindersPolling() {
+    try {
+        if (_remindersPollInterval) { clearInterval(_remindersPollInterval); _remindersPollInterval = null; }
+    } catch (e) { console.warn('stopRemindersPolling failed', e); }
+}
+
+// Persistent banner UI to prompt user to enable reminders (for browsers that block autoplay)
+function showEnableRemindersBanner() {
+    try {
+        if (document.getElementById('enableRemindersBanner')) return;
+        const banner = document.createElement('div');
+        banner.id = 'enableRemindersBanner';
+        banner.className = 'enable-reminders-banner';
+        banner.innerHTML = `<div style="font-weight:600;color:#5a3b00;">Reminders active</div><div style="color:#5a3b00;opacity:0.9;margin-left:8px;">Click to enable sound & visual alerts</div><div style="margin-left:8px;"><button id="enableRemindersBtn">Enable</button><button id="dismissRemindersBtn" style="margin-left:6px;background:#eee;color:#333;padding:6px 10px;border-radius:6px;border:none;">Dismiss</button></div>`;
+        document.body.appendChild(banner);
+        document.getElementById('enableRemindersBtn').addEventListener('click', () => {
+            _unlockAudioOnInteraction();
+            startReminderAlerts();
+            playReminderBeep(500, 880);
+            hideEnableRemindersBanner();
+        });
+        document.getElementById('dismissRemindersBtn').addEventListener('click', () => {
+            hideEnableRemindersBanner();
+        });
+    } catch (e) { console.warn('showEnableRemindersBanner failed', e); }
+}
+
+function hideEnableRemindersBanner() {
+    try {
+        const el = document.getElementById('enableRemindersBanner');
+        if (el) el.remove();
+    } catch (e) {}
+}
+
+function flashHeaderOnce() {
+    try {
+        const header = document.querySelector('header');
+        if (!header) return;
+        header.classList.add('reminder-flash');
+        // ensure we remove previous timeout
+        if (_reminderFlashTimeout) clearTimeout(_reminderFlashTimeout);
+        _reminderFlashTimeout = setTimeout(() => {
+            header.classList.remove('reminder-flash');
+            _reminderFlashTimeout = null;
+        }, 8000);
+    } catch (e) { console.warn('flashHeaderOnce failed', e); }
+}
+
+function triggerReminderAlert() {
+    playReminderBeep();
+    flashHeaderOnce();
+    // also toggle document title briefly
+    try {
+        const original = document.title;
+        let toggled = false;
+        const tId = setInterval(() => {
+            document.title = toggled ? original : '⚠ Pending Personalization Reminders';
+            toggled = !toggled;
+        }, 800);
+        setTimeout(() => { clearInterval(tId); document.title = original; }, 8000);
+    } catch (e) {}
+}
+
+function startReminderAlerts() {
+    // only one interval
+    if (_reminderAlertInterval) return;
+    // trigger immediately
+    triggerReminderAlert();
+    // set repeating every 30 seconds (temporary for development)
+    _reminderAlertInterval = setInterval(() => {
+        triggerReminderAlert();
+    }, 30 * 1000);
+}
+
+function stopReminderAlerts() {
+    try {
+        if (_reminderAlertInterval) { clearInterval(_reminderAlertInterval); _reminderAlertInterval = null; }
+        if (_reminderFlashTimeout) { clearTimeout(_reminderFlashTimeout); _reminderFlashTimeout = null; }
+        const header = document.querySelector('header'); if (header) header.classList.remove('reminder-flash');
+    } catch (e) { console.warn('stopReminderAlerts failed', e); }
+}
+
+function showAlert(message, type) {
+    try {
+        const alert = document.createElement('div');
+        alert.className = `alert alert-${type}`;
+        alert.textContent = message;
+
+        // Prefer a known wrapper; fall back to body if missing
+        const container = document.querySelector('.layout-wrapper') || document.querySelector('.container') || document.body;
+        if (container.firstChild) container.insertBefore(alert, container.firstChild);
+        else container.appendChild(alert);
+
+        setTimeout(() => {
+            alert.remove();
+        }, 5000);
+    } catch (e) {
+        // Fail silently to avoid breaking caller flows
+        console.warn('showAlert failed', e);
+    }
 }
 
 async function generateReminders() {
