@@ -21,6 +21,39 @@ function initializeSidebar() {
     });
 }
 
+window.appendDocumentNumber = function(arn) {
+    const modal = document.createElement('div'); modal.className='modal'; modal.style.display='block';
+    modal.innerHTML = `<div class="modal-content" style="max-width:420px">
+        <h3>Append Document Number</h3>
+        <p>ARN: <strong>${arn}</strong></p>
+        <label style="display:block;margin-top:8px;font-weight:600;">Document Number</label>
+        <input id="_doc_no" type="text" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-top:6px;">
+        <div style="margin-top:12px;text-align:right;display:flex;gap:8px;justify-content:flex-end;">
+            <button id="_doc_cancel" class="btn">Cancel</button>
+            <button id="_doc_save" class="btn btn-primary">Save</button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+    function close(){ modal.remove(); }
+    document.getElementById('_doc_cancel').onclick = () => close();
+    document.getElementById('_doc_save').onclick = async () => {
+        const docNo = document.getElementById('_doc_no').value.trim();
+        if (!docNo) return alert('Please enter a document number');
+        try {
+            const res = await fetch(`${API_BASE}/arns/${encodeURIComponent(arn)}/document-number`, {
+                method: 'PUT', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ document_number: docNo })
+            });
+            const d = await res.json().catch(()=>({}));
+            if (!res.ok) return showAlert(d.error || 'Failed to save document number', 'error');
+            showAlert('Document number saved', 'success');
+            close();
+            await Promise.all([loadARNs(), loadPendingDeliveries(), loadDeliveryStats()]);
+        } catch (e) { console.error(e); showAlert('Failed to save document number', 'error'); }
+    };
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+}
+
 function switchView(viewName) {
     document.querySelectorAll('.sidebar-item').forEach(btn => {
         btn.classList.remove('active');
@@ -964,6 +997,9 @@ async function loadARNs() {
                                    arn.status === 'Submitted to Personalization' ? 'submitted' :
                                    arn.status === 'Pending Delivery' ? 'pending' : 'delivered';
 
+            // allow officers and admins to append a document number after personalization and before delivery
+            const canAppendDoc = currentUser && (currentUser.role === 'officer' || currentUser.role === 'admin') && arn.status !== 'Delivered';
+
             return `
                 <div class="arn-item ${statusBadgeClass}">
                     <div class="arn-info">
@@ -977,9 +1013,11 @@ async function loadARNs() {
                             Created: ${formatDate(arn.created_at)}${arn.submitted_at ? ' | Submitted: ' + formatDate(arn.submitted_at) : ''}
                             ${arn.delivered_at ? ' | Delivered: ' + formatDate(arn.delivered_at) : ''}
                         </div>
+                        ${arn.document_number ? `<div style="margin-top:6px;color:#666;">Doc No: <strong>${escapeHtml(arn.document_number)}</strong></div>` : ''}
                     </div>
-                    <div>
+                    <div style="display:flex;gap:8px;flex-direction:column;">
                         ${arn.status !== 'Delivered' ? `<button class="btn btn-primary" onclick="openStatusModal('${arn.arn}', '${arn.status}')">Update Status</button>` : ''}
+                        ${canAppendDoc ? `<button class="btn btn-secondary" onclick="appendDocumentNumber('${arn.arn}')">Append Doc No</button>` : ''}
                     </div>
                 </div>
             `;
@@ -1045,16 +1083,20 @@ async function loadPendingDeliveries() {
             <div class="pending-delivery-item">
                 <h3>${state} (${stateArns.length} ARN${stateArns.length > 1 ? 's' : ''})</h3>
                 <div style="margin-top: 10px;">
-                    ${stateArns.map(arn => `
+                    ${stateArns.map(arn => {
+                        const canOfficerAppend = currentUser && (currentUser.role === 'officer' || currentUser.role === 'admin') && arn.status !== 'Delivered';
+                        return `
                         <div style="padding: 5px 0; border-bottom: 1px solid #eee; display:flex;justify-content:space-between;align-items:center;">
                             <div>
                                 <strong>${arn.arn}</strong>${arn.name ? ' — ' + escapeHtml(arn.name) : ''} <span style="color:#666">- Pending since ${formatDate(arn.pending_delivery_at)}</span>
+                                ${arn.document_number ? `<div style="margin-top:6px;color:#666;">Doc No: <strong>${escapeHtml(arn.document_number)}</strong>${arn.document_number_set_by ? ` — by ${escapeHtml(arn.document_number_set_by)}${arn.document_number_set_at ? ' at ' + formatDate(arn.document_number_set_at) : ''}` : ''}</div>` : ''}
                             </div>
                             <div style="display:flex;gap:6px;align-items:center;">
                                 ${arn.delivery_note_path ? `<button class="btn" onclick="viewArnDeliveryNote('${arn.arn}')">View Note</button><button class="btn btn-secondary" onclick="regenerateArnDeliveryNote('${arn.arn}')">Regenerate</button>` : `<button class="btn btn-primary" onclick="generateArnDeliveryNote('${arn.arn}')">Generate Note</button>`}
+                                ${canOfficerAppend ? `<button class="btn btn-secondary" onclick="appendDocumentNumber('${arn.arn}')">Append Doc No</button>` : ''}
                             </div>
                         </div>
-                    `).join('')}
+                    `}).join('')}
                 </div>
                 <div style="margin-top:10px;">
                     <button class="btn btn-primary" onclick="prepareDispatch('${state}', ${stateArns.length})">Generate Delivery Note</button>
@@ -1355,7 +1397,15 @@ async function receiveConfirmation(batchId) {
             });
             if (!res.ok) { const err = await res.json().catch(()=>({})); return showAlert(err.error || 'Failed to upload confirmation', 'error'); }
             showAlert(`Confirmation received for ${batchId}. Batch marked Delivered.`, 'success');
-            await renderDispatchBatches();
+            // Refresh dispatch batches and delivery-related views so delivered items disappear
+            await Promise.all([
+                renderDispatchBatches(),
+                loadPendingDeliveries(),
+                loadDeliveryStats(),
+                loadDeliveryHistory(),
+                loadARNs(),
+                loadDashboardStats()
+            ]);
         } catch (e) { console.error(e); showAlert('Failed to upload confirmation', 'error'); }
     };
     fileInput.click();

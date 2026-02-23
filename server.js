@@ -102,6 +102,30 @@ function initializeDatabase() {
       FOREIGN KEY (state) REFERENCES states(name)
     )`);
 
+    // Ensure document_number and audit columns exist (for personalization document tracking)
+    db.all(`PRAGMA table_info('arns')`, [], (err, cols) => {
+      if (err) return console.error('PRAGMA table_info failed', err);
+      const colNames = (cols || []).map(c => c.name);
+      const migrations = [];
+      if (!colNames.includes('document_number')) {
+        migrations.push(`ALTER TABLE arns ADD COLUMN document_number TEXT`);
+      }
+      if (!colNames.includes('document_number_set_by')) {
+        migrations.push(`ALTER TABLE arns ADD COLUMN document_number_set_by TEXT`);
+      }
+      if (!colNames.includes('document_number_set_at')) {
+        migrations.push(`ALTER TABLE arns ADD COLUMN document_number_set_at DATETIME`);
+      }
+      migrations.forEach(sql => {
+        try {
+          db.run(sql, [], (err2) => {
+            if (err2) console.error('Failed to run migration:', sql, err2);
+            else console.log('Migration applied:', sql);
+          });
+        } catch (e) { console.error('Migration error', e); }
+      });
+    });
+
     // Delivery history table
     db.run(`CREATE TABLE IF NOT EXISTS delivery_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1097,6 +1121,31 @@ app.put('/api/arns/:arn/status', requireRole(['operator','admin','supervisor']),
         }
       }
     );
+  });
+});
+
+// Append or update document number for an ARN (store officer or admin)
+app.put('/api/arns/:arn/document-number', requireRole(['officer','admin']), (req, res) => {
+  const { document_number } = req.body;
+  const { arn } = req.params;
+
+  if (!document_number) return res.status(400).json({ error: 'document_number is required' });
+
+  db.get('SELECT * FROM arns WHERE arn = ?', [arn], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: 'ARN not found' });
+
+    // Only allow setting document number before delivery (Submitted or Pending Delivery)
+    if (row.status !== 'Submitted to Personalization' && row.status !== 'Pending Delivery') {
+      return res.status(400).json({ error: `Cannot set document number at status ${row.status}` });
+    }
+
+    const actor = req.session && req.session.user ? req.session.user.username : null;
+    db.run(`UPDATE arns SET document_number = ?, document_number_set_by = ?, document_number_set_at = CURRENT_TIMESTAMP WHERE arn = ?`, [document_number, actor, arn], function(err2) {
+      if (err2) return res.status(500).json({ error: err2.message });
+      logAudit(arn, 'DOCUMENT_NUMBER_SET', row.status, `document_number=${document_number} by ${actor || 'unknown'}`);
+      res.json({ success: true });
+    });
   });
 });
 
