@@ -179,7 +179,10 @@
                         </div>
 
                         <div class="section">
-                            <h3>Pending Deliveries by State</h3>
+                            <h3>Awaiting Confirmation (Signed & Dispatched)</h3>
+                            <div id="awaitingConfirmations" class="pending-deliveries"></div>
+
+                            <h3 style="margin-top:18px">Pending Deliveries by State</h3>
                             <div id="pendingDeliveries" class="pending-deliveries"></div>
                         </div>
 
@@ -254,8 +257,8 @@
 
                         <div class="section">
                             <h3>Record SHQ Pickup</h3>
-                            <p class="info-text">Mark ARNs as collected at SHQ. Paste ARNs and provide collector details.</p>
-                            <textarea id="pickupArnsInput" rows="3" placeholder="ARN1\nARN2"></textarea>
+                            <p class="info-text">Mark ARNs or Document Numbers as collected at SHQ. Paste one identifier per line (ARN or Doc No) and provide collector details.</p>
+                                <textarea id="pickupArnsInput" rows="3" placeholder="ARN_or_DocNo_1\nARN_or_DocNo_2"></textarea>
                             <input type="text" id="collectorName" placeholder="Collector name">
                             <input type="text" id="collectorId" placeholder="Collector ID / Ref">
                             <input type="text" id="collectorPhone" placeholder="Phone">

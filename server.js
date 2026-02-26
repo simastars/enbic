@@ -124,6 +124,18 @@ function initializeDatabase() {
           });
         } catch (e) { console.error('Migration error', e); }
       });
+      // Attempt to create a unique index on document_number if there are no duplicates
+      db.all(`SELECT document_number, COUNT(*) as c FROM arns WHERE document_number IS NOT NULL GROUP BY document_number HAVING c>1`, [], (err3, dupRows) => {
+        if (err3) return console.error('Failed to check document_number duplicates', err3);
+        if (dupRows && dupRows.length > 0) {
+          console.warn('document_number has duplicates; skipping unique index creation. Duplicates:', dupRows.slice(0,5));
+        } else {
+          db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_arns_document_number_unique ON arns(document_number)`, [], (err4) => {
+            if (err4) console.error('Failed to create unique index on document_number', err4);
+            else console.log('Unique index created on arns(document_number)');
+          });
+        }
+      });
     });
 
     // Delivery history table
@@ -175,6 +187,20 @@ function initializeDatabase() {
       confirmation_note_path TEXT,
       status TEXT DEFAULT 'prepared'
     )`);
+
+    // Ensure dispatch_batches has pickup-related columns
+    db.all(`PRAGMA table_info(dispatch_batches)`, [], (err, cols) => {
+      if (err) return console.error('PRAGMA table_info(dispatch_batches) failed', err);
+      const colNames = (cols || []).map(c => c.name);
+      const addCols = [];
+      if (!colNames.includes('purpose')) addCols.push(`ALTER TABLE dispatch_batches ADD COLUMN purpose TEXT`);
+      if (!colNames.includes('collector_name')) addCols.push(`ALTER TABLE dispatch_batches ADD COLUMN collector_name TEXT`);
+      if (!colNames.includes('collector_phone')) addCols.push(`ALTER TABLE dispatch_batches ADD COLUMN collector_phone TEXT`);
+      if (!colNames.includes('arns_json')) addCols.push(`ALTER TABLE dispatch_batches ADD COLUMN arns_json TEXT`);
+      addCols.forEach(sql => {
+        db.run(sql, [], (err2) => { if (err2) console.error('Failed to add dispatch_batches column', err2); else console.log('Added dispatch_batches column'); });
+      });
+    });
 
     // Users table for authentication and RBAC
     db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -1141,10 +1167,16 @@ app.put('/api/arns/:arn/document-number', requireRole(['officer','admin']), (req
     }
 
     const actor = req.session && req.session.user ? req.session.user.username : null;
-    db.run(`UPDATE arns SET document_number = ?, document_number_set_by = ?, document_number_set_at = CURRENT_TIMESTAMP WHERE arn = ?`, [document_number, actor, arn], function(err2) {
-      if (err2) return res.status(500).json({ error: err2.message });
-      logAudit(arn, 'DOCUMENT_NUMBER_SET', row.status, `document_number=${document_number} by ${actor || 'unknown'}`);
-      res.json({ success: true });
+    // Ensure uniqueness: document_number must not already be assigned to a different ARN
+    db.get(`SELECT arn FROM arns WHERE document_number = ? AND arn != ?`, [document_number, arn], (err3, existing) => {
+      if (err3) return res.status(500).json({ error: err3.message });
+      if (existing) return res.status(409).json({ error: `Document number already assigned to ARN ${existing.arn}` });
+
+      db.run(`UPDATE arns SET document_number = ?, document_number_set_by = ?, document_number_set_at = CURRENT_TIMESTAMP WHERE arn = ?`, [document_number, actor, arn], function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        logAudit(arn, 'DOCUMENT_NUMBER_SET', row.status, `document_number=${document_number} by ${actor || 'unknown'}`);
+        res.json({ success: true });
+      });
     });
   });
 });
@@ -1213,8 +1245,87 @@ app.post('/api/dispatch/batches', requireRole(['operator','admin']), (req, res) 
       if (err.message && err.message.includes('UNIQUE')) return res.status(409).json({ error: 'Batch already exists' });
       return res.status(500).json({ error: err.message });
     }
-    res.json({ success: true, id: this.lastID });
+
+    const insertedId = this.lastID;
+
+    // If this is a state batch (not a single-ARN batch), capture snapshot of current Pending Delivery ARNs for the state
+    if (!batchArn) {
+      db.all('SELECT arn FROM arns WHERE state = ? AND status = ?', [state, 'Pending Delivery'], (err2, rows) => {
+        if (!err2 && rows && rows.length > 0) {
+          const list = rows.map(r => r.arn);
+          const json = JSON.stringify(list);
+          db.run('UPDATE dispatch_batches SET arns_json = ? WHERE id = ?', [json, insertedId], (err3) => {
+            if (err3) console.error('Failed to save arns_json for batch', err3);
+            // return success after update
+            return res.json({ success: true, id: insertedId });
+          });
+        } else {
+          return res.json({ success: true, id: insertedId });
+        }
+      });
+    } else {
+      // single-ARN batch: store batchArn in arns_json as well
+      const json = JSON.stringify([batchArn]);
+      db.run('UPDATE dispatch_batches SET arns_json = ? WHERE id = ?', [json, insertedId], (err4) => {
+        if (err4) console.error('Failed to set arns_json for single-ARN batch', err4);
+        return res.json({ success: true, id: insertedId });
+      });
+    }
   });
+});
+
+// Create a pickup dispatch batch for SHQ pickup which requires signatures
+app.post('/api/dispatch/pickup', requireRole(['officer','admin']), (req, res) => {
+  const { identifiers, collector_name, collector_phone } = req.body; // identifiers: array of ARN or document numbers
+  if (!Array.isArray(identifiers) || identifiers.length === 0) return res.status(400).json({ error: 'identifiers array required' });
+
+  // resolve identifiers to ARNs (look up by arn or document_number)
+  const resolved = [];
+  const tasks = identifiers.map(id => new Promise((resolve) => {
+    const v = (id || '').trim();
+    if (!v) return resolve(null);
+    db.get('SELECT arn, status FROM arns WHERE arn = ? OR document_number = ?', [v, v], (err, row) => {
+      if (err) return resolve({ error: err.message, id: v });
+      if (!row) return resolve({ error: 'not found', id: v });
+      if (row.status !== 'Pending Delivery') return resolve({ error: `invalid status (${row.status})`, id: v });
+      resolve(row.arn);
+    });
+  }));
+
+  Promise.all(tasks).then(results => {
+    const errors = results.filter(r => r && r.error);
+    if (errors.length > 0) return res.status(400).json({ error: 'Some identifiers invalid', details: errors });
+
+    const arns = results.filter(Boolean);
+    if (arns.length === 0) return res.status(400).json({ error: 'No valid ARNs to pickup' });
+
+    const batchId = `pickup-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+    const cardCount = arns.length;
+    const arnsJson = JSON.stringify(arns);
+
+    db.run(`INSERT INTO dispatch_batches (batch_id, state, card_count, batch_arn, purpose, collector_name, collector_phone, arns_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [batchId, 'SHQ Pickup', cardCount, null, 'pickup', collector_name || null, collector_phone || null, arnsJson], function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+
+      // generate an initial pickup note HTML file with details
+      const rowsHtml = arns.map(a => `<tr><td>${a}</td></tr>`).join('');
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>Pickup Note - ${batchId}</title>
+        <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}table{border-collapse:collapse;width:100%}td,th{padding:8px;border:1px solid #ddd}</style>
+        </head><body><h1>Pickup Note</h1><div><strong>Batch:</strong> ${batchId}</div><div><strong>Collector:</strong> ${collector_name || ''} ${collector_phone ? ' — ' + collector_phone : ''}</div>
+        <table><thead><tr><th>ARN</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+        <div style="margin-top:12px;color:#666;">Signatures required: Operator and Store Officer</div></body></html>`;
+
+      const filename = `pickup_${batchId}_${Date.now()}.html`;
+      const filePath = path.join(DISPATCH_NOTES_DIR, filename);
+      fs.writeFile(filePath, html, (err2) => {
+        if (err2) console.error('Failed to write pickup note', err2);
+        // update batch with delivery_note_path so UI can download/view
+        db.run(`UPDATE dispatch_batches SET delivery_note_path = ? WHERE batch_id = ?`, [filePath, batchId], (err3) => {
+          if (err3) console.error('Failed to set pickup note path', err3);
+          res.json({ success: true, batchId, arns });
+        });
+      });
+    });
+  }).catch(e => res.status(500).json({ error: String(e) }));
 });
 
 // List dispatch batches
@@ -1273,9 +1384,62 @@ app.post('/api/dispatch/:batchId/sign', requireLogin, (req, res) => {
       if (err2) return res.status(500).json({ error: err2.message });
 
       // if both signatures now present, set status to ready_for_dispatch
-      db.get(`SELECT operator_name, officer_name FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err3, updated) => {
+      db.get(`SELECT * FROM dispatch_batches WHERE batch_id = ?`, [batchId], (err3, updated) => {
         if (!err3 && updated && updated.operator_name && updated.officer_name) {
           db.run(`UPDATE dispatch_batches SET status = 'ready_for_dispatch' WHERE batch_id = ?`, [batchId]);
+
+          // If this is a pickup batch, regenerate the pickup note HTML to include signatures and card details
+          if (String(updated.purpose || '').toLowerCase() === 'pickup') {
+            // gather ARNs
+            let arnsList = [];
+            try { if (updated.arns_json) { const parsed = JSON.parse(updated.arns_json); if (Array.isArray(parsed)) arnsList = parsed; } } catch (e) { arnsList = []; }
+            if (updated.batch_arn && arnsList.length === 0) arnsList.push(updated.batch_arn);
+
+            const selectArns = arnsList.length > 0 ? `SELECT arn, name, state, status, created_at, document_number FROM arns WHERE arn IN (${arnsList.map(()=>'?').join(',')})` : null;
+            const fetchArns = (cb) => {
+              if (!selectArns) return cb([]);
+              db.all(selectArns, arnsList, (errA, rowsA) => { if (errA) return cb([]); cb(rowsA || []); });
+            };
+
+            fetchArns((cards) => {
+              const esc = (s) => (s === null || s === undefined) ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+              const operatorText = updated.operator_name || '';
+              const officerText = updated.officer_name || '';
+              const collectorText = (updated.collector_name ? esc(updated.collector_name) : '') + (updated.collector_phone ? (' — ' + esc(updated.collector_phone)) : '');
+
+              const rowsHtml = (cards || []).map(c => `
+                <tr>
+                  <td>${esc(c.arn)}</td>
+                  <td>${esc(c.name||'')}</td>
+                  <td>${esc(c.state||'')}</td>
+                  <td>${esc(c.document_number||'')}</td>
+                  <td>${esc(c.created_at||'')}</td>
+                </tr>
+              `).join('');
+
+              const html = `<!doctype html><html><head><meta charset="utf-8"><title>Pickup Confirmation - ${updated.batch_id}</title>
+                <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
+                </head><body>
+                <h1><strong>Picked at SHQ</strong></h1>
+                <div><strong>Batch ID:</strong> ${esc(updated.batch_id)}</div>
+                <div><strong>Created:</strong> ${esc(updated.created_at || '')}</div>
+                <div style="margin-top:8px"><strong>Collector:</strong> ${collectorText}</div>
+                <div style="margin-top:6px"><strong>Operator:</strong> ${esc(operatorText)} &nbsp; <strong>Store Officer:</strong> ${esc(officerText)}</div>
+                <div style="margin-top:12px"><strong>Card Count:</strong> ${updated.card_count || (cards||[]).length}</div>
+                <table><thead><tr><th>ARN</th><th>Name</th><th>State</th><th>Document No</th><th>Created</th></tr></thead><tbody>
+                ${rowsHtml}
+                </tbody></table>
+                <div style="margin-top:18px;font-size:12px;color:#666">Signatures: Operator (${esc(operatorText)}) — Store Officer (${esc(officerText)})</div>
+                </body></html>`;
+
+              const filename = `pickup_confirm_${updated.batch_id}_${Date.now()}.html`;
+              const filePath = path.join(DISPATCH_NOTES_DIR, filename);
+              fs.writeFile(filePath, html, (errW) => {
+                if (errW) return console.error('Failed to write pickup confirmation note', errW);
+                db.run(`UPDATE dispatch_batches SET delivery_note_path = ? WHERE batch_id = ?`, [filePath, updated.batch_id], (errU) => { if (errU) console.error('Failed to update batch delivery_note_path', errU); });
+              });
+            });
+          }
         }
       });
 
@@ -1312,7 +1476,48 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
     const savedPath = saveDataUrlToFile(fileData, `confirmation_${batchId}`);
     if (!savedPath) return res.status(500).json({ error: 'Failed to save confirmation file' });
 
-    // mark ARNs delivered for this batch (single-ARN batch or state batch)
+    // mark ARNs delivered/collected for this batch (single-ARN, listed ARNs, or state batch)
+    if (batch.purpose === 'pickup') {
+      // for pickup batches, prefer arns_json list; else single batch_arn
+      const targetArns = [];
+      if (batch.arns_json) {
+        try { const parsed = JSON.parse(batch.arns_json); if (Array.isArray(parsed)) parsed.forEach(a=>targetArns.push(a)); } catch(e) {}
+      }
+      if (batch.batch_arn && targetArns.length === 0) targetArns.push(batch.batch_arn);
+
+      if (targetArns.length === 1) {
+        const theArn = targetArns[0];
+        db.get('SELECT * FROM arns WHERE arn = ? AND status = ?', [theArn, 'Pending Delivery'], (err2, row) => {
+          if (err2) return res.status(500).json({ error: err2.message });
+          const arnCount = row ? 1 : 0;
+          if (arnCount > 0) {
+            db.run(`UPDATE arns SET status = 'Collected at SHQ', collected_at = CURRENT_TIMESTAMP WHERE arn = ?`, [theArn], function(err3) {
+              if (err3) console.error('Error marking ARN collected:', err3);
+            });
+          }
+
+          db.run(`UPDATE dispatch_batches SET confirmation_note_path = ?, delivered_at = CURRENT_TIMESTAMP, status = 'delivered' WHERE batch_id = ?`, [savedPath, batchId], function(err5) {
+            if (err5) return res.status(500).json({ error: err5.message });
+            if (arnCount > 0) logAudit(theArn, 'COLLECTED_VIA_PICKUP', 'Pending Delivery', `Collected (Batch: ${batchId})`);
+            res.json({ success: true, count: arnCount });
+          });
+        });
+      } else if (targetArns.length > 1) {
+        const placeholders = targetArns.map(() => '?').join(',');
+        db.run(`UPDATE arns SET status = 'Collected at SHQ', collected_at = CURRENT_TIMESTAMP WHERE arn IN (${placeholders})`, targetArns, function(err3) {
+          if (err3) console.error('Error marking ARNs collected:', err3);
+        });
+        db.run(`UPDATE dispatch_batches SET confirmation_note_path = ?, delivered_at = CURRENT_TIMESTAMP, status = 'delivered' WHERE batch_id = ?`, [savedPath, batchId], function(err5) {
+          if (err5) return res.status(500).json({ error: err5.message });
+          targetArns.forEach(a => logAudit(a, 'COLLECTED_VIA_PICKUP', 'Pending Delivery', `Collected (Batch: ${batchId})`));
+          res.json({ success: true, count: targetArns.length });
+        });
+      } else {
+        return res.status(400).json({ error: 'No ARNs listed for pickup batch' });
+      }
+      return;
+    }
+
     if (batch.batch_arn) {
       // single ARN
       const theArn = batch.batch_arn;

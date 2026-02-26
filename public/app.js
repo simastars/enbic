@@ -342,16 +342,24 @@ function setupEventListeners() {
                                 const phone = document.getElementById('collectorPhone').value.trim();
                                 if (arns.length === 0) return showAlert('Provide at least one ARN', 'error');
                                 if (!collector_name && !collector_id && !phone) return showAlert('Provide collector info', 'error');
-                                try {
-                                    const res = await fetch(`${API_BASE}/arns/pickup`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ arns, collector_name, collector_id, phone }) });
-                                    const d = await res.json();
-                                    if (!res.ok) return showAlert(d.error || 'Failed to record pickup', 'error');
-                                    const result = d.results || [];
-                                    const ok = result.filter(r=>r.success).length;
-                                    document.getElementById('pickupArnsResult').innerHTML = `<div>${ok} succeeded, ${result.length-ok} failed.</div><pre>${JSON.stringify(result,null,2)}</pre>`;
-                                    showAlert('Recorded pickups', 'success');
-                                    await Promise.all([loadARNs(), loadDeliveryStats(), loadDashboardStats()]);
-                                } catch (e) { showAlert('Error recording pickup', 'error'); }
+                                        try {
+                                            // support past behavior that sent ARNs; we now create a pickup dispatch batch requiring signatures
+                                            const identifiers = arns; // can be ARNs or document numbers
+                                            const res = await fetch(`${API_BASE}/dispatch/pickup`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ identifiers, collector_name, collector_phone: phone }) });
+                                            const d = await res.json().catch(()=>({}));
+                                            if (!res.ok) {
+                                                // show detailed invalid identifier info when provided
+                                                if (d && Array.isArray(d.details) && d.details.length > 0) {
+                                                    const html = `<div style="color:#c0392b;font-weight:600;margin-bottom:6px;">Some identifiers are invalid</div><ul style="color:#333;margin-top:6px;">${d.details.map(it => `<li><strong>${escapeHtml(it.id||'')}</strong>: ${escapeHtml(it.error||String(it))}</li>`).join('')}</ul>`;
+                                                    const el = document.getElementById('pickupArnsResult'); if (el) el.innerHTML = html;
+                                                    return showAlert('Some identifiers invalid — see details below', 'error');
+                                                }
+                                                return showAlert(d.error || 'Failed to create pickup batch', 'error');
+                                            }
+                                            showAlert('Pickup batch created. Signatures required to complete pickup.', 'success');
+                                            document.getElementById('pickupArnsResult').innerHTML = `<div>Created pickup batch: ${d.batchId}</div><pre>${JSON.stringify(d.arns,null,2)}</pre>`;
+                                            await Promise.all([renderDispatchBatches(), loadPendingDeliveries(), loadDashboardStats()]);
+                                        } catch (e) { console.error(e); showAlert('Error recording pickup', 'error'); }
                             });
                         }
     if (issuePersoForm) {
@@ -1062,17 +1070,51 @@ async function loadDeliveryTab() {
 
 async function loadPendingDeliveries() {
     try {
-        const response = await fetch(`${API_BASE}/arns?status=Pending Delivery`);
-        const arns = await response.json();
+        // load ARNs pending delivery and dispatch batches to separate dispatched ones
+        const [arnsRes, batches] = await Promise.all([fetch(`${API_BASE}/arns?status=Pending Delivery`), fetchDispatchBatches()]);
+        const arns = await arnsRes.json();
+
+        // collect ARNs that belong to dispatched batches (waiting for upload confirmation)
+        const dispatchedGroups = [];
+        const dispatchedSet = new Set();
+        (batches || []).forEach(b => {
+            if (String(b.status).toLowerCase() === 'dispatched') {
+                let list = [];
+                if (b.arns_json) {
+                    try { const parsed = JSON.parse(b.arns_json); if (Array.isArray(parsed)) list = parsed; } catch (e) { list = []; }
+                }
+                if (b.batch_arn && list.length === 0) list = [b.batch_arn];
+                if (list.length > 0) {
+                    list.forEach(a => dispatchedSet.add(a));
+                    dispatchedGroups.push({ batch: b, arns: list });
+                }
+            }
+        });
+
+        const awaitingEl = document.getElementById('awaitingConfirmations');
+        if (dispatchedGroups.length === 0) {
+            if (awaitingEl) awaitingEl.innerHTML = '<p class="info-text">No awaiting confirmations</p>';
+        } else {
+            if (awaitingEl) awaitingEl.innerHTML = dispatchedGroups.map(g => `
+                <div class="pending-delivery-item">
+                    <h3>${escapeHtml(g.batch.state || 'Batch')} — ${g.batch.batch_id} (${g.arns.length} ARN${g.arns.length>1?'s':''})</h3>
+                    <div style="margin-top:8px;">
+                        ${g.arns.map(a => `<div style="padding:4px 0;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;"><div><strong>${escapeHtml(a)}</strong></div><div><button class="btn" onclick="viewArnDeliveryNote('${escapeHtml(a)}')">View Note</button></div></div>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
 
         const container = document.getElementById('pendingDeliveries');
-        if (arns.length === 0) {
+        // filter out ARNs that are part of dispatched batches
+        const filteredArns = (arns || []).filter(a => !dispatchedSet.has(a.arn));
+        if (filteredArns.length === 0) {
             container.innerHTML = '<p class="info-text">No pending deliveries</p>';
             return;
         }
 
         const byState = {};
-        arns.forEach(arn => {
+        filteredArns.forEach(arn => {
             if (!byState[arn.state]) {
                 byState[arn.state] = [];
             }
