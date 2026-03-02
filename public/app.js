@@ -706,14 +706,14 @@ async function loadRequests() {
         // Determine view based on user role
         const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'operator');
         const isOfficer = currentUser && currentUser.role === 'officer';
-        
+
         // Officer view - shows their requests with status
         if (isOfficer) {
             container.innerHTML = `<div style="padding:12px;background:#f9f9f9;border-radius:6px;">
                 <h4>Your Requests</h4>
                 ${rows.map(r => {
-                    const statusColor = r.status === 'approved' ? '#28a745' : (r.status === 'rejected' ? '#dc3545' : (r.status === 'pending' ? '#ffc107' : '#17a2b8'));
-                    const statusBgColor = r.status === 'approved' ? '#d4edda' : (r.status === 'rejected' ? '#f8d7da' : (r.status === 'pending' ? '#fff3cd' : '#d1ecf1'));
+                    const statusColor = r.status === 'approved' ? '#28a745' : (r.status === 'rejected' ? '#dc3545' : (r.status === 'pending' ? '#ffc107' : (r.status === 'officer_signed' ? '#17a2b8' : (r.status === 'fully_signed' ? '#6c63ff' : '#999'))));
+                    const statusBgColor = r.status === 'approved' ? '#d4edda' : (r.status === 'rejected' ? '#f8d7da' : (r.status === 'pending' ? '#fff3cd' : (r.status === 'officer_signed' ? '#d1ecf1' : (r.status === 'fully_signed' ? '#e6e0ff' : '#f0f0f0'))));
                     return `<div style="padding:10px;margin:8px 0;border:1px solid #ddd;border-radius:4px;background:${statusBgColor};">
                         <div style="display:flex;justify-content:space-between;align-items:center;">
                             <div>
@@ -721,13 +721,18 @@ async function loadRequests() {
                                 <span style="margin-left:12px;color:#666;">Qty: <strong>${r.quantity}</strong></span>
                                 <span style="margin-left:12px;color:#666;">Needed by: <strong>${r.needed_by || 'N/A'}</strong></span>
                             </div>
-                            <div style="text-align:right;">
-                                <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;">${r.status.toUpperCase()}</span>
+                            <div>
+                                <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;margin-right:8px;">${r.status.toUpperCase().replace(/_/g, ' ')}</span>
                             </div>
                         </div>
                         ${r.reason ? `<div style="margin-top:6px;font-size:12px;color:#666;">Reason: ${r.reason}</div>` : ''}
                         ${r.approved_qty ? `<div style="margin-top:6px;font-size:12px;color:#666;">Approved Qty: <strong>${r.approved_qty}</strong></div>` : ''}
                         ${r.decision_note ? `<div style="margin-top:6px;font-size:12px;color:#666;">Decision: ${r.decision_note}</div>` : ''}
+                        <div style="margin-top:8px;display:flex;gap:8px;">
+                            <button class="btn btn-sm" style="padding:4px 10px;font-size:11px;" onclick="viewRequestForm(${r.id})">View Form</button>
+                            <button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:11px;display:${r.status === 'approved' && !r.officer_signature ? 'inline-block' : 'none'};" onclick="openOfficerSignModal(${r.id})">Sign Form</button>
+                            <button class="btn btn-secondary btn-sm" style="padding:4px 10px;font-size:11px;display:${r.officer_signature ? 'inline-block' : 'none'};" onclick="downloadRequestForm(${r.id})">Download</button>
+                        </div>
                     </div>`;
                 }).join('')}
             </div>`;
@@ -737,8 +742,8 @@ async function loadRequests() {
             container.innerHTML = `<div style="padding:12px;">
                 <h4>All Blank Card Requests</h4>
                 ${rows.map(r => {
-                    const statusColor = r.status === 'approved' ? '#28a745' : (r.status === 'rejected' ? '#dc3545' : (r.status === 'pending' ? '#ffc107' : (r.status === 'partially_approved' ? '#17a2b8' : '#999')));
-                    const statusBgColor = r.status === 'approved' ? '#d4edda' : (r.status === 'rejected' ? '#f8d7da' : (r.status === 'pending' ? '#fff3cd' : (r.status === 'partially_approved' ? '#d1ecf1' : '#f0f0f0')));
+                    const statusColor = r.status === 'approved' ? '#28a745' : (r.status === 'rejected' ? '#dc3545' : (r.status === 'pending' ? '#ffc107' : (r.status === 'officer_signed' ? '#17a2b8' : (r.status === 'fully_signed' ? '#6c63ff' : '#999'))));
+                    const statusBgColor = r.status === 'approved' ? '#d4edda' : (r.status === 'rejected' ? '#f8d7da' : (r.status === 'pending' ? '#fff3cd' : (r.status === 'officer_signed' ? '#d1ecf1' : (r.status === 'fully_signed' ? '#e6e0ff' : '#f0f0f0'))));
                     return `<div style="padding:10px;margin:8px 0;border:1px solid #ddd;border-radius:4px;background:${statusBgColor};">
                         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
                             <div style="flex:1;">
@@ -751,12 +756,17 @@ async function loadRequests() {
                                 ${r.reason ? `<div style="margin-top:4px;font-size:12px;color:#666;">Reason: ${r.reason}</div>` : ''}
                                 ${r.approved_qty ? `<div style="margin-top:4px;font-size:12px;color:#666;">Approved: <strong>${r.approved_qty}</strong></div>` : ''}
                                 ${r.decision_note ? `<div style="margin-top:4px;font-size:12px;color:#666;">Note: ${r.decision_note}</div>` : ''}
+                                ${r.officer_signature ? `<div style="margin-top:4px;font-size:12px;color:#2c7e2c;">✓ Officer Signed: ${r.officer_signed_at ? formatDate(r.officer_signed_at) : 'N/A'}</div>` : ''}
+                                ${r.admin_signature ? `<div style="margin-top:4px;font-size:12px;color:#2c7e2c;">✓ Admin Signed: ${r.admin_signed_at ? formatDate(r.admin_signed_at) : 'N/A'}</div>` : ''}
                             </div>
                             <div style="text-align:right;">
-                                <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;margin-bottom:8px;">${r.status.toUpperCase()}</span>
+                                <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;margin-bottom:8px;">${r.status.toUpperCase().replace(/_/g, ' ')}</span>
                                 <div style="display:flex;gap:4px;flex-direction:column;">
+                                    <button class="btn btn-sm" style="padding:4px 8px;font-size:11px;" onclick="viewRequestForm(${r.id})">View Form</button>
                                     <button class="btn btn-sm" style="padding:4px 8px;font-size:11px;" onclick="openDecideModal(${r.id}, '${r.status}', ${r.quantity}, '${r.requester || 'N/A'}')" ${r.status === 'pending' ? '' : 'disabled'}>Decide</button>
-                                    <button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:11px;" onclick="generateIssue(${r.id})" ${r.status === 'approved' || r.status === 'partially_approved' ? '' : 'disabled'}>Generate Issue</button>
+                                    <button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:11px;display:${r.officer_signature && !r.admin_signature ? 'inline-block' : 'none'};" onclick="openAdminSignModal(${r.id})">Countersign</button>
+                                    <button class="btn btn-secondary btn-sm" style="padding:4px 8px;font-size:11px;" onclick="downloadRequestForm(${r.id})">Download</button>
+                                    <button class="btn btn-sm" style="padding:4px 8px;font-size:11px;" onclick="generateIssue(${r.id})" ${r.status === 'approved' || r.status === 'partially_approved' ? '' : 'disabled'}>Generate Issue</button>
                                 </div>
                             </div>
                         </div>
@@ -859,6 +869,263 @@ window.openIssueSign = function(issueId, signer) {
         } catch (e) { showAlert('Error signing', 'error'); }
     };
 }
+
+// Request Form Functions
+window.viewRequestForm = async function(requestId) {
+    try {
+        const res = await fetch(`${API_BASE}/inventory/requests/${requestId}/form`);
+        const req_data = await res.json();
+        if (!res.ok) return showAlert(req_data.error || 'Failed to load form', 'error');
+        
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.style.display = 'block';
+        
+        const statusColor = req_data.status === 'approved' ? '#28a745' : (req_data.status === 'rejected' ? '#dc3545' : (req_data.status === 'pending' ? '#ffc107' : (req_data.status === 'officer_signed' ? '#17a2b8' : (req_data.status === 'fully_signed' ? '#6c63ff' : '#999'))));
+        
+        modal.innerHTML = `<div class="modal-content" style="max-width:700px;max-height:90vh;overflow-y:auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                <h3>Request Form #${req_data.id}</h3>
+                <button onclick="this.closest('.modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;">&times;</button>
+            </div>
+            
+            <div style="background:#f9f9f9;padding:12px;border-radius:6px;margin-bottom:15px;">
+                <div style="display:flex;gap:20px;margin-bottom:10px;flex-wrap:wrap;">
+                    <div><strong>Status:</strong> <span style="padding:4px 8px;background:${statusColor};color:white;border-radius:4px;font-size:12px;">${req_data.status.toUpperCase().replace(/_/g, ' ')}</span></div>
+                    <div><strong>Request ID:</strong> ${req_data.id}</div>
+                    <div><strong>Created:</strong> ${formatDate(req_data.created_at)}</div>
+                </div>
+            </div>
+            
+            <h4 style="border-bottom:2px solid #ddd;padding-bottom:8px;">Request Details</h4>
+            <div style="margin-bottom:15px;">
+                <div style="margin-bottom:10px;"><strong>Quantity Requested:</strong> ${req_data.quantity}</div>
+                <div style="margin-bottom:10px;"><strong>Needed By:</strong> ${req_data.needed_by || 'N/A'}</div>
+                <div style="margin-bottom:10px;"><strong>Reason:</strong> ${req_data.reason || 'N/A'}</div>
+            </div>
+            
+            ${req_data.status !== 'pending' ? `
+                <h4 style="border-bottom:2px solid #ddd;padding-bottom:8px;margin-top:15px;">Approval Details</h4>
+                <div style="margin-bottom:15px;">
+                    <div style="margin-bottom:10px;"><strong>Approved By:</strong> ${req_data.approver_name || 'N/A'}</div>
+                    <div style="margin-bottom:10px;"><strong>Approved Quantity:</strong> ${req_data.approved_qty || 'N/A'}</div>
+                    <div style="margin-bottom:10px;"><strong>Decision Note:</strong> ${req_data.decision_note || 'N/A'}</div>
+                </div>
+            ` : ''}
+            
+            ${req_data.officer_signature || req_data.admin_signature ? `
+                <h4 style="border-bottom:2px solid #ddd;padding-bottom:8px;margin-top:15px;">Signatures</h4>
+                <div style="margin-bottom:15px;">
+                    ${req_data.officer_signature ? `
+                        <div style="margin-bottom:15px;padding:10px;background:#d4edda;border-radius:4px;">
+                            <strong style="color:#2c7e2c;">✓ Officer Signature</strong>
+                            <div style="margin-top:8px;border:1px solid #ccc;padding:8px;background:white;border-radius:4px;">
+                                <img src="${req_data.officer_signature}" style="max-width:100%;max-height:120px;display:block;">
+                            </div>
+                            <div style="margin-top:4px;font-size:12px;">Signed: ${formatDate(req_data.officer_signed_at)}</div>
+                        </div>
+                    ` : ''}
+                    ${req_data.admin_signature ? `
+                        <div style="padding:10px;background:#d4edda;border-radius:4px;">
+                            <strong style="color:#2c7e2c;">✓ Admin Countersignature</strong>
+                            <div style="margin-top:8px;border:1px solid #ccc;padding:8px;background:white;border-radius:4px;">
+                                <img src="${req_data.admin_signature}" style="max-width:100%;max-height:120px;display:block;">
+                            </div>
+                            <div style="margin-top:4px;font-size:12px;">Signed: ${formatDate(req_data.admin_signed_at)}</div>
+                        </div>
+                    ` : ''}
+                </div>
+            ` : ''}
+            
+            <div style="text-align:right;margin-top:20px;display:flex;gap:8px;justify-content:flex-end;">
+                <button class="btn" onclick="this.closest('.modal').remove()">Close</button>
+                <button class="btn btn-secondary" onclick="downloadRequestForm(${req_data.id})">Download PDF</button>
+            </div>
+        </div>`;
+        
+        document.body.appendChild(modal);
+        modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    } catch (e) {
+        console.error('Error viewing form:', e);
+        showAlert('Failed to view form', 'error');
+    }
+}
+
+window.downloadRequestForm = function(requestId) {
+    window.open(`${API_BASE}/inventory/requests/${requestId}/download-form`, '_blank');
+}
+
+window.openOfficerSignModal = function(requestId) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'block';
+    
+    let canvas = null;
+    
+    modal.innerHTML = `<div class="modal-content" style="max-width:600px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+            <h3>Sign Request Form #${requestId}</h3>
+            <button onclick="this.closest('.modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;">&times;</button>
+        </div>
+        
+        <div style="margin-bottom:15px;">
+            <p style="color:#666;margin-bottom:10px;">Draw your signature in the canvas below:</p>
+            <div style="border:2px solid #ddd;border-radius:6px;background:white;overflow:hidden;">
+                <canvas id="signatureCanvas" width="550" height="150" style="display:block;cursor:crosshair;"></canvas>
+            </div>
+            <button class="btn" style="margin-top:8px;" onclick="clearSignatureCanvas()">Clear</button>
+        </div>
+        
+        <div style="text-align:right;display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn" onclick="this.closest('.modal').remove()">Cancel</button>
+            <button class="btn btn-primary" id="signBtn" onclick="submitOfficerSignature(${requestId})">Sign & Save</button>
+        </div>
+    </div>`;
+    
+    document.body.appendChild(modal);
+    
+    setTimeout(() => {
+        canvas = document.getElementById('signatureCanvas');
+        if (canvas) initializeSignatureCanvas(canvas);
+    }, 100);
+    
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+}
+
+window.openAdminSignModal = function(requestId) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'block';
+    
+    let canvas = null;
+    
+    modal.innerHTML = `<div class="modal-content" style="max-width:600px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+            <h3>Countersign Request Form #${requestId}</h3>
+            <button onclick="this.closest('.modal').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;">&times;</button>
+        </div>
+        
+        <p style="color:#666;margin-bottom:15px;">Review and countersign the request form as Admin/Operator.</p>
+        
+        <div style="margin-bottom:15px;">
+            <p style="color:#666;margin-bottom:10px;">Draw your signature in the canvas below:</p>
+            <div style="border:2px solid #ddd;border-radius:6px;background:white;overflow:hidden;">
+                <canvas id="signatureCanvas" width="550" height="150" style="display:block;cursor:crosshair;"></canvas>
+            </div>
+            <button class="btn" style="margin-top:8px;" onclick="clearSignatureCanvas()">Clear</button>
+        </div>
+        
+        <div style="text-align:right;display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn" onclick="this.closest('.modal').remove()">Cancel</button>
+            <button class="btn btn-primary" id="signBtn" onclick="submitAdminSignature(${requestId})">Countersign & Save</button>
+        </div>
+    </div>`;
+    
+    document.body.appendChild(modal);
+    
+    setTimeout(() => {
+        canvas = document.getElementById('signatureCanvas');
+        if (canvas) initializeSignatureCanvas(canvas);
+    }, 100);
+    
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+}
+
+// Signature canvas functions
+let signatureCanvases = {};
+
+window.initializeSignatureCanvas = function(canvas) {
+    const ctx = canvas.getContext('2d');
+    let isDrawing = false;
+    
+    canvas.addEventListener('mousedown', (e) => {
+        isDrawing = true;
+        const rect = canvas.getBoundingClientRect();
+        ctx.beginPath();
+        ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+    });
+    
+    canvas.addEventListener('mousemove', (e) => {
+        if (!isDrawing) return;
+        const rect = canvas.getBoundingClientRect();
+        ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+        ctx.stroke();
+    });
+    
+    canvas.addEventListener('mouseup', () => isDrawing = false);
+    canvas.addEventListener('mouseout', () => isDrawing = false);
+    
+    // Set line styles
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#000';
+}
+
+window.clearSignatureCanvas = function() {
+    const canvas = document.getElementById('signatureCanvas');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+}
+
+window.submitOfficerSignature = async function(requestId) {
+    const canvas = document.getElementById('signatureCanvas');
+    if (!canvas) return showAlert('Canvas not found', 'error');
+    
+    const signatureData = canvas.toDataURL('image/png');
+    if (signatureData === 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==') {
+        return showAlert('Please draw a signature', 'error');
+    }
+    
+    try {
+        const res = await fetch(`${API_BASE}/inventory/requests/${requestId}/sign-officer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ signature_data: signatureData })
+        });
+        
+        const data = await res.json();
+        if (!res.ok) return showAlert(data.error || 'Failed to sign', 'error');
+        
+        showAlert('Form signed successfully', 'success');
+        document.querySelector('.modal').remove();
+        await loadRequests();
+    } catch (e) {
+        console.error('Error signing:', e);
+        showAlert('Error signing form', 'error');
+    }
+}
+
+window.submitAdminSignature = async function(requestId) {
+    const canvas = document.getElementById('signatureCanvas');
+    if (!canvas) return showAlert('Canvas not found', 'error');
+    
+    const signatureData = canvas.toDataURL('image/png');
+    if (signatureData === 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==') {
+        return showAlert('Please draw a signature', 'error');
+    }
+    
+    try {
+        const res = await fetch(`${API_BASE}/inventory/requests/${requestId}/sign-admin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ signature_data: signatureData })
+        });
+        
+        const data = await res.json();
+        if (!res.ok) return showAlert(data.error || 'Failed to countersign', 'error');
+        
+        showAlert('Form countersigned successfully', 'success');
+        document.querySelector('.modal').remove();
+        await loadRequests();
+    } catch (e) {
+        console.error('Error countersigning:', e);
+        showAlert('Error countersigning form', 'error');
+    }
+}
+
 
 async function loadReconciliation() {
     try {
