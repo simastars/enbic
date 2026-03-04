@@ -1,0 +1,762 @@
+[
+  {
+    "id": 1,
+    "arn": "260119_120753_7250",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260119_120753_7250 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-19 16:06:46",
+    "resolved_at": "2026-01-19 16:25:02"
+  },
+  {
+    "id": 2,
+    "arn": "260119_120753_7250",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260119_120753_7250 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-19 16:28:28",
+    "resolved_at": "2026-01-19 16:29:02"
+  },
+  {
+    "id": 3,
+    "arn": "260119_105150_5298",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260119_105150_5298 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-19 16:28:29",
+    "resolved_at": "2026-01-19 16:28:47"
+  },
+  {
+    "id": 4,
+    "arn": "260119_120753_7250",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260119_120753_7250 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-19 16:29:31",
+    "resolved_at": "2026-01-19 16:29:46"
+  },
+  {
+    "id": 5,
+    "arn": "260119_105150_5298",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260119_105150_5298 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-19 16:29:31",
+    "resolved_at": "2026-01-19 16:29:56"
+  },
+  {
+    "id": 6,
+    "arn": "260119_120753_7250",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260119_120753_7250 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-19 16:30:04",
+    "resolved_at": "2026-01-19 16:32:34"
+  },
+  {
+    "id": 7,
+    "arn": "260119_103213_7256",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260119_103213_7256 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-19 16:35:19",
+    "resolved_at": "2026-01-19 16:42:18"
+  },
+  {
+    "id": 8,
+    "arn": "260119_102853_3645",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260119_102853_3645 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-19 16:39:38",
+    "resolved_at": "2026-01-21 19:04:49"
+  },
+  {
+    "id": 9,
+    "arn": "260119_102717_5364",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260119_102717_5364 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-19 16:40:17",
+    "resolved_at": "2026-01-23 11:46:22"
+  },
+  {
+    "id": 10,
+    "arn": "260119_103213_7256",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260119_103213_7256 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-19 16:42:18",
+    "resolved_at": "2026-01-19 16:43:37"
+  },
+  {
+    "id": 11,
+    "arn": "260118_143841_1843",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260118_143841_1843 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-19 16:44:56",
+    "resolved_at": "2026-01-23 11:46:21"
+  },
+  {
+    "id": 12,
+    "arn": "260118_143841_1843",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260118_143841_1843 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-19 17:05:02",
+    "resolved_at": "2026-01-23 11:46:21"
+  },
+  {
+    "id": 13,
+    "arn": "260121_162408_4382",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260121_162408_4382 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-21 18:02:28",
+    "resolved_at": "2026-01-23 11:46:20"
+  },
+  {
+    "id": 14,
+    "arn": "260121_150710_9286",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260121_150710_9286 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-21 18:02:42",
+    "resolved_at": "2026-01-23 11:46:20"
+  },
+  {
+    "id": 15,
+    "arn": "260121_145711_6834",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260121_145711_6834 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-21 18:03:45",
+    "resolved_at": "2026-01-21 18:04:19"
+  },
+  {
+    "id": 16,
+    "arn": "260121_143101_0142",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260121_143101_0142 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-21 18:03:54",
+    "resolved_at": "2026-01-21 18:04:08"
+  },
+  {
+    "id": 17,
+    "arn": "260121_143101_0142",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260121_143101_0142 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-21 18:04:08",
+    "resolved_at": "2026-01-21 18:04:12"
+  },
+  {
+    "id": 18,
+    "arn": "260121_145711_6834",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260121_145711_6834 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-21 18:04:19",
+    "resolved_at": "2026-01-23 11:46:19"
+  },
+  {
+    "id": 19,
+    "arn": "260121_150710_9286",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260121_150710_9286 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-21 18:08:24",
+    "resolved_at": "2026-01-23 11:46:19"
+  },
+  {
+    "id": 20,
+    "arn": "260121_162408_4382",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260121_162408_4382 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-21 18:08:26",
+    "resolved_at": "2026-01-23 11:46:18"
+  },
+  {
+    "id": 21,
+    "arn": "260121_143101_0142",
+    "reminder_type": "state_delivery_threshold",
+    "message": "State Bauchi has 3 pending cards — consider scheduling delivery",
+    "created_at": "2026-01-21 18:08:33",
+    "resolved_at": "2026-01-23 11:46:18"
+  },
+  {
+    "id": 22,
+    "arn": "260118_143841_1843",
+    "reminder_type": "state_delivery_threshold",
+    "message": "State Sokoto has 3 pending cards — consider scheduling delivery",
+    "created_at": "2026-01-21 18:08:41",
+    "resolved_at": "2026-01-23 11:46:16"
+  },
+  {
+    "id": 23,
+    "arn": "260121_141053_0297",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260121_141053_0297 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-21 19:17:26",
+    "resolved_at": "2026-01-23 11:46:16"
+  },
+  {
+    "id": 24,
+    "arn": "260121_134359_3694",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260121_134359_3694 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-21 19:17:56",
+    "resolved_at": "2026-01-23 11:46:15"
+  },
+  {
+    "id": 25,
+    "arn": "260121_134359_3694",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260121_134359_3694 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-21 19:18:00",
+    "resolved_at": "2026-01-23 11:46:14"
+  },
+  {
+    "id": 26,
+    "arn": "260121_141053_0297",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260121_141053_0297 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-21 19:18:04",
+    "resolved_at": "2026-01-23 11:46:04"
+  },
+  {
+    "id": 27,
+    "arn": "260119_102853_3645",
+    "reminder_type": "state_delivery_threshold",
+    "message": "State Karnataka has 3 pending cards — consider scheduling delivery",
+    "created_at": "2026-01-21 19:18:12",
+    "resolved_at": "2026-01-23 11:46:02"
+  },
+  {
+    "id": 28,
+    "arn": "260121_143101_0142",
+    "reminder_type": "state_delivery_threshold",
+    "message": "State Bauchi has 4 pending cards — consider scheduling delivery",
+    "created_at": "2026-01-23 11:46:51",
+    "resolved_at": "2026-01-23 11:49:32"
+  },
+  {
+    "id": 29,
+    "arn": "260118_143841_1843",
+    "reminder_type": "state_delivery_threshold",
+    "message": "State Sokoto has 3 pending cards — consider scheduling delivery",
+    "created_at": "2026-01-23 11:46:51",
+    "resolved_at": "2026-01-23 11:49:37"
+  },
+  {
+    "id": 30,
+    "arn": "260127_144836_8725",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260127_144836_8725 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-27 16:56:18",
+    "resolved_at": "2026-01-27 19:16:38"
+  },
+  {
+    "id": 31,
+    "arn": "260127_132204_4756",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260127_132204_4756 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-27 17:35:57",
+    "resolved_at": "2026-02-17 12:35:15"
+  },
+  {
+    "id": 32,
+    "arn": "260127_144836_8725",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260127_144836_8725 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-27 17:37:16",
+    "resolved_at": "2026-02-17 12:34:29"
+  },
+  {
+    "id": 33,
+    "arn": "260127_130517_8179",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260127_130517_8179 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-27 17:55:03",
+    "resolved_at": "2026-02-17 12:34:36"
+  },
+  {
+    "id": 34,
+    "arn": "260127_130517_8179",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260127_130517_8179 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-29 13:10:20",
+    "resolved_at": "2026-02-17 12:34:39"
+  },
+  {
+    "id": 35,
+    "arn": "260127_132204_4756",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260127_132204_4756 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-29 13:11:25",
+    "resolved_at": "2026-02-17 12:35:13"
+  },
+  {
+    "id": 36,
+    "arn": "260129_124005_0529",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260129_124005_0529 is still awaiting capture and personalization submission",
+    "created_at": "2026-01-29 16:36:53",
+    "resolved_at": "2026-02-17 12:35:07"
+  },
+  {
+    "id": 37,
+    "arn": "260129_124005_0529",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260129_124005_0529 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-01-29 16:37:10",
+    "resolved_at": "2026-02-17 12:34:58"
+  },
+  {
+    "id": 38,
+    "arn": "260217_083121_1207",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260217_083121_1207 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 12:48:36",
+    "resolved_at": null
+  },
+  {
+    "id": 39,
+    "arn": "260217_073940_4852",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260217_073940_4852 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 12:58:05",
+    "resolved_at": null
+  },
+  {
+    "id": 40,
+    "arn": "260217_073940_4852",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260217_073940_4852 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-17 12:59:50",
+    "resolved_at": null
+  },
+  {
+    "id": 41,
+    "arn": "260217_083121_1207",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260217_083121_1207 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-17 13:00:00",
+    "resolved_at": null
+  },
+  {
+    "id": 42,
+    "arn": "260217_041404_8932",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260217_041404_8932 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 13:04:43",
+    "resolved_at": null
+  },
+  {
+    "id": 43,
+    "arn": "260217_041404_8932",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260217_041404_8932 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-17 13:04:52",
+    "resolved_at": null
+  },
+  {
+    "id": 44,
+    "arn": "260212_094936_9025",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260212_094936_9025 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 14:21:16",
+    "resolved_at": null
+  },
+  {
+    "id": 45,
+    "arn": "260212_094936_9025",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260212_094936_9025 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-17 14:21:23",
+    "resolved_at": null
+  },
+  {
+    "id": 46,
+    "arn": "260217_032013_8260",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260217_032013_8260 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 14:23:05",
+    "resolved_at": null
+  },
+  {
+    "id": 47,
+    "arn": "260217_032013_8260",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260217_032013_8260 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-17 14:23:07",
+    "resolved_at": null
+  },
+  {
+    "id": 48,
+    "arn": "260216_212749_2497",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260216_212749_2497 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 14:35:25",
+    "resolved_at": null
+  },
+  {
+    "id": 49,
+    "arn": "260216_212144_2891",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260216_212144_2891 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 14:36:08",
+    "resolved_at": null
+  },
+  {
+    "id": 50,
+    "arn": "260216_212144_2891",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260216_212144_2891 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-17 14:36:14",
+    "resolved_at": null
+  },
+  {
+    "id": 51,
+    "arn": "260216_212749_2497",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260216_212749_2497 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-17 14:36:20",
+    "resolved_at": null
+  },
+  {
+    "id": 52,
+    "arn": "260216_211626_0674",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260216_211626_0674 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 14:39:22",
+    "resolved_at": null
+  },
+  {
+    "id": 53,
+    "arn": "260216_211626_0674",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260216_211626_0674 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-17 14:39:28",
+    "resolved_at": null
+  },
+  {
+    "id": 54,
+    "arn": "260216_211209_6917",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260216_211209_6917 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 14:53:02",
+    "resolved_at": "2026-02-23 13:59:34"
+  },
+  {
+    "id": 55,
+    "arn": "260216_210857_3724",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260216_210857_3724 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-17 15:43:01",
+    "resolved_at": "2026-02-23 13:57:41"
+  },
+  {
+    "id": 56,
+    "arn": "260216_210857_3724",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260216_210857_3724 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-23 13:57:41",
+    "resolved_at": "2026-02-23 13:59:30"
+  },
+  {
+    "id": 57,
+    "arn": "260216_211209_6917",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260216_211209_6917 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-23 13:59:34",
+    "resolved_at": "2026-02-23 13:59:42"
+  },
+  {
+    "id": 58,
+    "arn": "260223_140358_5312",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260223_140358_5312 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-23 14:40:32",
+    "resolved_at": "2026-02-23 14:41:16"
+  },
+  {
+    "id": 59,
+    "arn": "260223_134859_0658",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260223_134859_0658 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-23 14:40:59",
+    "resolved_at": "2026-02-23 14:41:06"
+  },
+  {
+    "id": 60,
+    "arn": "260223_134859_0658",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260223_134859_0658 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-23 14:41:06",
+    "resolved_at": "2026-02-23 14:41:12"
+  },
+  {
+    "id": 61,
+    "arn": "260223_140358_5312",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260223_140358_5312 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-23 14:41:17",
+    "resolved_at": "2026-02-23 14:41:21"
+  },
+  {
+    "id": 62,
+    "arn": "260223_132030_4107",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260223_132030_4107 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-23 14:55:29",
+    "resolved_at": null
+  },
+  {
+    "id": 63,
+    "arn": "260223_132030_4107",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260223_132030_4107 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-23 14:55:56",
+    "resolved_at": null
+  },
+  {
+    "id": 64,
+    "arn": "260223_145419_5846",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260223_145419_5846 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-23 16:19:22",
+    "resolved_at": null
+  },
+  {
+    "id": 65,
+    "arn": "260223_145419_5846",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260223_145419_5846 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-23 16:19:27",
+    "resolved_at": null
+  },
+  {
+    "id": 66,
+    "arn": "260223_085618_5802",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260223_085618_5802 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-23 16:36:49",
+    "resolved_at": null
+  },
+  {
+    "id": 67,
+    "arn": "260223_085618_5802",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260223_085618_5802 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-23 16:36:53",
+    "resolved_at": null
+  },
+  {
+    "id": 68,
+    "arn": "260226_141311_4692",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260226_141311_4692 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 15:57:37",
+    "resolved_at": "2026-02-26 15:58:24"
+  },
+  {
+    "id": 69,
+    "arn": "260226_133712_7039",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260226_133712_7039 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 15:57:53",
+    "resolved_at": "2026-02-26 15:58:08"
+  },
+  {
+    "id": 70,
+    "arn": "260226_133712_7039",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260226_133712_7039 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 15:58:08",
+    "resolved_at": "2026-02-26 15:58:18"
+  },
+  {
+    "id": 71,
+    "arn": "260226_141311_4692",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260226_141311_4692 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 15:58:24",
+    "resolved_at": "2026-02-26 15:58:34"
+  },
+  {
+    "id": 72,
+    "arn": "260226_132154_5470",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260226_132154_5470 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 16:07:04",
+    "resolved_at": null
+  },
+  {
+    "id": 73,
+    "arn": "260226_131849_6473",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260226_131849_6473 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 16:07:20",
+    "resolved_at": null
+  },
+  {
+    "id": 74,
+    "arn": "260226_131849_6473",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260226_131849_6473 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 16:07:29",
+    "resolved_at": null
+  },
+  {
+    "id": 75,
+    "arn": "260226_132154_5470",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260226_132154_5470 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 16:07:36",
+    "resolved_at": null
+  },
+  {
+    "id": 76,
+    "arn": "260226_125256_6295",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260226_125256_6295 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 16:24:59",
+    "resolved_at": null
+  },
+  {
+    "id": 77,
+    "arn": "260226_124558_2650",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260226_124558_2650 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 16:25:15",
+    "resolved_at": "2026-02-26 16:31:13"
+  },
+  {
+    "id": 78,
+    "arn": "260226_124558_2650",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260226_124558_2650 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 16:25:19",
+    "resolved_at": "2026-02-26 16:31:10"
+  },
+  {
+    "id": 79,
+    "arn": "260226_125256_6295",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260226_125256_6295 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 16:25:21",
+    "resolved_at": null
+  },
+  {
+    "id": 80,
+    "arn": "260226_113205_3648",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260226_113205_3648 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 16:32:35",
+    "resolved_at": null
+  },
+  {
+    "id": 81,
+    "arn": "260226_113205_3648",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260226_113205_3648 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 16:32:39",
+    "resolved_at": null
+  },
+  {
+    "id": 82,
+    "arn": "260225_215827_3728",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260225_215827_3728 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 16:43:54",
+    "resolved_at": null
+  },
+  {
+    "id": 83,
+    "arn": "260225_215827_3728",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260225_215827_3728 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 16:43:57",
+    "resolved_at": null
+  },
+  {
+    "id": 84,
+    "arn": "260225_155620_2513",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260225_155620_2513 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 16:49:53",
+    "resolved_at": null
+  },
+  {
+    "id": 85,
+    "arn": "260225_144006_9465",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260225_144006_9465 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 16:50:16",
+    "resolved_at": null
+  },
+  {
+    "id": 86,
+    "arn": "260225_144006_9465",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260225_144006_9465 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 16:50:20",
+    "resolved_at": null
+  },
+  {
+    "id": 87,
+    "arn": "260225_155620_2513",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260225_155620_2513 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 16:50:23",
+    "resolved_at": null
+  },
+  {
+    "id": 88,
+    "arn": "260225_132137_1452",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260225_132137_1452 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 17:12:16",
+    "resolved_at": null
+  },
+  {
+    "id": 89,
+    "arn": "260225_120238_0713",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260225_120238_0713 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 17:12:33",
+    "resolved_at": null
+  },
+  {
+    "id": 90,
+    "arn": "260225_120238_0713",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260225_120238_0713 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 17:12:42",
+    "resolved_at": null
+  },
+  {
+    "id": 91,
+    "arn": "260225_132137_1452",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260225_132137_1452 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 17:12:45",
+    "resolved_at": null
+  },
+  {
+    "id": 92,
+    "arn": "260225_114856_4579",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260225_114856_4579 is still awaiting capture and personalization submission",
+    "created_at": "2026-02-26 17:25:29",
+    "resolved_at": null
+  },
+  {
+    "id": 93,
+    "arn": "260225_114856_4579",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260225_114856_4579 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-02-26 17:25:33",
+    "resolved_at": null
+  },
+  {
+    "id": 94,
+    "arn": "260304_131341_9572",
+    "reminder_type": "pending_capture",
+    "message": "ARN 260304_131341_9572 is still awaiting capture and personalization submission",
+    "created_at": "2026-03-04 13:56:17",
+    "resolved_at": null
+  },
+  {
+    "id": 95,
+    "arn": "260304_131341_9572",
+    "reminder_type": "pending_personalization",
+    "message": "ARN 260304_131341_9572 has been submitted to personalization — move to pending delivery",
+    "created_at": "2026-03-04 13:56:32",
+    "resolved_at": null
+  }
+]

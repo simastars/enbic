@@ -1,0 +1,42 @@
+[
+  {
+    "id": 1,
+    "name": "Andhra Pradesh",
+    "created_at": "2026-01-19 15:05:48"
+  },
+  {
+    "id": 3,
+    "name": "Goa",
+    "created_at": "2026-01-19 15:05:48"
+  },
+  {
+    "id": 27,
+    "name": "Chandigarh",
+    "created_at": "2026-01-19 15:05:52"
+  },
+  {
+    "id": 35,
+    "name": "Karnataka",
+    "created_at": "2026-01-19 15:05:54"
+  },
+  {
+    "id": 37,
+    "name": "Sokoto",
+    "created_at": "2026-01-19 15:41:37"
+  },
+  {
+    "id": 38,
+    "name": "Bauchi",
+    "created_at": "2026-01-21 18:02:23"
+  },
+  {
+    "id": 39,
+    "name": "Ikoyi",
+    "created_at": "2026-02-17 12:47:46"
+  },
+  {
+    "id": 40,
+    "name": "FCT (Gwagwalada)",
+    "created_at": "2026-03-04 13:56:09"
+  }
+]

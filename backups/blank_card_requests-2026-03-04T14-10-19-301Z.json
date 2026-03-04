@@ -1,0 +1,54 @@
+[
+  {
+    "id": 1,
+    "requester_id": 1,
+    "quantity": 5,
+    "reason": "almost exhausted",
+    "needed_by": "2026-01-27",
+    "status": "approved",
+    "approved_qty": 5,
+    "approver_id": 1,
+    "decision_note": "for testing",
+    "created_at": "2026-01-27 17:55:49",
+    "updated_at": "2026-01-27 18:01:02"
+  },
+  {
+    "id": 2,
+    "requester_id": 1,
+    "quantity": 5,
+    "reason": "almost exhausted",
+    "needed_by": "2026-01-27",
+    "status": "approved",
+    "approved_qty": 5,
+    "approver_id": 1,
+    "decision_note": "",
+    "created_at": "2026-01-27 17:58:05",
+    "updated_at": "2026-02-17 12:40:50"
+  },
+  {
+    "id": 3,
+    "requester_id": 2,
+    "quantity": 5,
+    "reason": "For official use",
+    "needed_by": "2026-02-17",
+    "status": "partially_approved",
+    "approved_qty": 3,
+    "approver_id": 1,
+    "decision_note": "",
+    "created_at": "2026-02-17 12:39:25",
+    "updated_at": "2026-02-23 14:44:13"
+  },
+  {
+    "id": 4,
+    "requester_id": 2,
+    "quantity": 5,
+    "reason": "For official use",
+    "needed_by": "2026-02-17",
+    "status": "pending",
+    "approved_qty": 0,
+    "approver_id": null,
+    "decision_note": null,
+    "created_at": "2026-02-17 12:39:30",
+    "updated_at": null
+  }
+]

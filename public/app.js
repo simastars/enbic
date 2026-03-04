@@ -16,9 +16,82 @@ function initializeSidebar() {
     document.querySelectorAll('.sidebar-item').forEach(btn => {
         btn.addEventListener('click', () => {
             const viewName = btn.dataset.view;
+            // show submenu for this group's parent and hide others
+            const grp = btn.closest('.sidebar-item-group');
+            document.querySelectorAll('.sidebar-item-group').forEach(g => {
+                if (g === grp) g.classList.add('active'); else g.classList.remove('active');
+            });
             switchView(viewName);
         });
     });
+}
+
+// Open a modal showing full request details and signatory info; allow signing issue notes when permitted
+window.openRequestModal = function(request) {
+    const modal = document.createElement('div'); modal.className='modal'; modal.style.display='block';
+    const issueInfo = request.issue_id ? `
+        <h5>Issue Note</h5>
+        <div><strong>Issue ID:</strong> ${request.issue_id}</div>
+        <div><strong>Status:</strong> ${request.issue_status || 'N/A'}</div>
+        <div><strong>Issuer:</strong> ${request.issuer_name || 'N/A'} ${request.issuer_signed_at ? `on ${formatDate(request.issuer_signed_at)}` : ''}</div>
+        <div><strong>Receiver:</strong> ${request.receiver_name || 'N/A'} ${request.receiver_signed_at ? `on ${formatDate(request.receiver_signed_at)}` : ''}</div>
+    ` : '';
+
+    modal.innerHTML = `<div class="modal-content" style="max-width:640px">
+        <h3>Request #${request.id}</h3>
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;">
+            <div><strong>Requester:</strong> ${escapeHtml(request.requester || 'Unknown')}</div>
+            <div><strong>Quantity:</strong> ${request.quantity}</div>
+            <div><strong>Needed by:</strong> ${request.needed_by || 'N/A'}</div>
+        </div>
+        <div style="margin-bottom:8px;"><strong>Reason:</strong><div style="margin-top:6px;color:#333">${escapeHtml(request.reason || '')}</div></div>
+        <div style="margin-bottom:8px;"><strong>Status:</strong> ${request.status} ${request.approved_qty ? ` — Approved: ${request.approved_qty}` : ''}</div>
+        <div style="margin-bottom:8px;"><strong>Approver:</strong> ${request.approver || 'N/A'} ${request.decision_note ? `<div style="margin-top:6px;color:#666;"><em>Note:</em> ${escapeHtml(request.decision_note)}</div>` : ''}</div>
+        ${issueInfo}
+        <div style="margin-top:12px;text-align:right;display:flex;gap:8px;justify-content:flex-end;">
+            <a class="btn btn-outline-primary" target="_blank" href="/forms/print-request?id=${request.id}">Print Request</a>
+            ${request.issue_id ? `<a class="btn btn-outline-primary" target="_blank" href="/forms/print-issue?id=${request.issue_id}">Print Issuance</a>` : ''}
+            <button id="_req_sign_requester" class="btn btn-success" ${request.requester_signed_at ? 'disabled' : ''}>Sign as Requester</button>
+            <button id="_req_sign_approver" class="btn btn-primary" ${request.approver_signed_at ? 'disabled' : ''}>Sign as Approver</button>
+            <button id="_req_close" class="btn btn-secondary">Close</button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+
+    function close(){ modal.remove(); }
+    document.getElementById('_req_close').onclick = () => close();
+    const signReqBtn = document.getElementById('_req_sign_requester');
+    const signAppBtn = document.getElementById('_req_sign_approver');
+    if (signReqBtn) {
+        signReqBtn.addEventListener('click', async () => {
+            const name = prompt('Enter your name to sign as requester:');
+            if (!name) return;
+            try {
+                const res = await fetch(`${API_BASE}/inventory/requests/${request.id}/sign`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ signer: 'requester', name }) });
+                const d = await res.json();
+                if (!res.ok) return showAlert(d.error || 'Failed to sign', 'error');
+                showAlert('Signed as requester', 'success');
+                signReqBtn.disabled = true;
+                // refresh requests list
+                await loadRequests();
+            } catch (e) { showAlert('Sign failed', 'error'); }
+        });
+    }
+    if (signAppBtn) {
+        signAppBtn.addEventListener('click', async () => {
+            const name = prompt('Enter your name to sign as approver:');
+            if (!name) return;
+            try {
+                const res = await fetch(`${API_BASE}/inventory/requests/${request.id}/sign`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ signer: 'approver', name }) });
+                const d = await res.json();
+                if (!res.ok) return showAlert(d.error || 'Failed to sign', 'error');
+                showAlert('Signed as approver', 'success');
+                signAppBtn.disabled = true;
+                await loadRequests();
+            } catch (e) { showAlert('Sign failed', 'error'); }
+        });
+    }
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 }
 
 window.appendDocumentNumber = function(arn) {
@@ -58,11 +131,18 @@ function switchView(viewName) {
     document.querySelectorAll('.sidebar-item').forEach(btn => {
         btn.classList.remove('active');
     });
+    // remove active on any sidebar groups
+    document.querySelectorAll('.sidebar-item-group').forEach(g => g.classList.remove('active'));
     document.querySelectorAll('.view-content').forEach(content => {
         content.classList.remove('active');
     });
 
-    document.querySelector(`[data-view="${viewName}"]`).classList.add('active');
+    const btn = document.querySelector(`[data-view="${viewName}"]`);
+    if (btn) {
+        btn.classList.add('active');
+        const grp = btn.closest('.sidebar-item-group');
+        if (grp) grp.classList.add('active');
+    }
     document.getElementById(viewName).classList.add('active');
 
     // Load view-specific data
@@ -428,6 +508,20 @@ function setupEventListeners() {
     if (refreshLedger) refreshLedger.addEventListener('click', loadLedger);
     const refreshRecon = document.getElementById('refreshRecon');
     if (refreshRecon) refreshRecon.addEventListener('click', loadReconciliation);
+
+    // Inventory submenu buttons (Bootstrap list-group) — delegate clicks to show sections
+    const submenuButtons = Array.from(document.querySelectorAll('.sidebar-submenu .submenu-item'));
+    if (submenuButtons.length > 0) {
+        submenuButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const sectionKey = btn.dataset.section;
+                // toggle active visual
+                submenuButtons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                showInventorySection(sectionKey);
+            });
+        });
+    }
 }
 
 async function loadInitialData() {
@@ -638,9 +732,29 @@ async function loadInventoryTab() {
             loadRequests(),
             loadIssueNotes()
         ]);
+        // Default to showing all sections and highlight corresponding submenu item
+        showInventorySection('all');
+        const submenuButtons = Array.from(document.querySelectorAll('.sidebar-submenu .submenu-item'));
+        submenuButtons.forEach(b => b.classList.toggle('active', b.dataset.section === 'all'));
     } catch (e) {
         console.error('Error loading inventory tab', e);
     }
+}
+
+// Show/hide inventory subsections. Uses data-section attributes on .section elements.
+function showInventorySection(sectionKey) {
+    const container = document.querySelector('#inventory .sections-container');
+    if (!container) return;
+    const sections = Array.from(container.querySelectorAll('.section'));
+    if (!sectionKey || sectionKey === 'all') {
+        sections.forEach(s => s.style.display = 'block');
+        return;
+    }
+
+    sections.forEach(s => {
+        const key = s.getAttribute('data-section') || '';
+        s.style.display = (key === sectionKey) ? 'block' : 'none';
+    });
 }
 
 async function loadInventoryBalance() {
@@ -723,6 +837,9 @@ async function loadRequests() {
                             </div>
                             <div style="text-align:right;">
                                 <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;">${r.status.toUpperCase()}</span>
+                                <div style="margin-top:8px;">
+                                    <button class="btn btn-sm btn-outline-secondary" onclick='openRequestModal(${JSON.stringify(r).replace(/'/g, "\\'")})'>View</button>
+                                </div>
                             </div>
                         </div>
                         ${r.reason ? `<div style="margin-top:6px;font-size:12px;color:#666;">Reason: ${r.reason}</div>` : ''}
@@ -757,6 +874,7 @@ async function loadRequests() {
                                 <div style="display:flex;gap:4px;flex-direction:column;">
                                     <button class="btn btn-sm" style="padding:4px 8px;font-size:11px;" onclick="openDecideModal(${r.id}, '${r.status}', ${r.quantity}, '${r.requester || 'N/A'}')" ${r.status === 'pending' ? '' : 'disabled'}>Decide</button>
                                     <button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:11px;" onclick="generateIssue(${r.id})" ${r.status === 'approved' || r.status === 'partially_approved' ? '' : 'disabled'}>Generate Issue</button>
+                                    <button class="btn btn-sm btn-outline-secondary" style="padding:4px 8px;font-size:11px;" onclick='openRequestModal(${JSON.stringify(r).replace(/'/g, "\\'")})'>View</button>
                                 </div>
                             </div>
                         </div>

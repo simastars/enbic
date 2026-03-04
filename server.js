@@ -15,6 +15,9 @@ const PORT = 3000;
 const DB_PATH = path.join(__dirname, 'data', 'enbic.db');
 const BACKUP_DIR = path.join(__dirname, 'backups');
 
+// Serve vendor assets from node_modules (Bootstrap etc.)
+app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));
+
 // Ensure directories exist
 if (!fs.existsSync(path.dirname(DB_PATH))) {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -278,6 +281,19 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME
     )`);
+
+    // Ensure signature columns exist on blank_card_requests
+    db.all(`PRAGMA table_info(blank_card_requests)`, [], (errSig, sigCols) => {
+      if (!errSig && sigCols) {
+        const names = sigCols.map(c => c.name);
+        const adds = [];
+        if (!names.includes('requester_name')) adds.push(`ALTER TABLE blank_card_requests ADD COLUMN requester_name TEXT`);
+        if (!names.includes('requester_signed_at')) adds.push(`ALTER TABLE blank_card_requests ADD COLUMN requester_signed_at DATETIME`);
+        if (!names.includes('approver_name')) adds.push(`ALTER TABLE blank_card_requests ADD COLUMN approver_name TEXT`);
+        if (!names.includes('approver_signed_at')) adds.push(`ALTER TABLE blank_card_requests ADD COLUMN approver_signed_at DATETIME`);
+        adds.forEach(sql => { db.run(sql, [], (ae) => { if (ae) console.warn('Could not add signature column:', ae.message); }); });
+      }
+    });
 
     // Issue notes / handover records (require issuer and receiver signatures)
     db.run(`CREATE TABLE IF NOT EXISTS issue_notes (
@@ -805,7 +821,7 @@ app.get('/api/inventory/requests', requireLogin, (req, res) => {
   const userRole = req.session.user ? req.session.user.role : null;
   const userId = req.session.user ? req.session.user.id : null;
   
-  let query = `SELECT r.*, u.username as requester FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id`;
+    let query = `SELECT r.*, u.username as requester, a.username as approver, r.requester_name, r.requester_signed_at, r.approver_name, r.approver_signed_at, i.id as issue_id, i.issuer_name, i.issuer_signed_at, i.receiver_name, i.receiver_signed_at, i.status as issue_status FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id LEFT JOIN users a ON r.approver_id = a.id LEFT JOIN issue_notes i ON i.request_id = r.id`;
   let params = [];
   
   // Officer can only see their own requests
@@ -819,7 +835,13 @@ app.get('/api/inventory/requests', requireLogin, (req, res) => {
   
   db.all(query, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
+    // Normalize dates for client
+    const out = (rows || []).map(r => ({
+      ...r,
+      requester_signed_at: r.requester_signed_at || null,
+      approver_signed_at: r.approver_signed_at || null
+    }));
+    res.json(out);
   });
 });
 
@@ -857,7 +879,7 @@ app.post('/api/inventory/requests/:id/decide', requireRole(['operator','admin'])
     }
     
     function proceedWithApproval() {
-      db.run(`UPDATE blank_card_requests SET status = ?, approved_qty = ?, approver_id = ?, decision_note = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [status, approved, approver_id, decision_note || '', id], function(err2) {
+      db.run(`UPDATE blank_card_requests SET status = ?, approved_qty = ?, approver_id = ?, decision_note = ?, approver_name = ?, approver_signed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [status, approved, approver_id, decision_note || '', req.session.user ? req.session.user.username : null, id], function(err2) {
         if (err2) return res.status(500).json({ error: err2.message });
         logAudit(null, 'REQUEST_DECIDED', reqRow.status, `${status} qty ${approved}`);
         
@@ -967,6 +989,39 @@ app.post('/api/inventory/issue/:issueId/sign', requireLogin, (req, res) => {
   });
 });
 
+// Sign a blank card request (requester or approver)
+app.post('/api/inventory/requests/:id/sign', requireLogin, (req, res) => {
+  const id = req.params.id;
+  const { signer, name } = req.body; // signer: 'requester' or 'approver'
+  if (!signer || !name) return res.status(400).json({ error: 'signer and name required' });
+
+  db.get(`SELECT * FROM blank_card_requests WHERE id = ?`, [id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: 'Request not found' });
+
+    if (signer === 'requester') {
+      // only the requester (or admin) can sign as requester
+      const userId = req.session.user ? req.session.user.id : null;
+      if (req.session.user && req.session.user.role !== 'admin' && req.session.user.role !== 'officer' && req.session.user.id !== row.requester_id) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      db.run(`UPDATE blank_card_requests SET requester_name = ?, requester_signed_at = CURRENT_TIMESTAMP WHERE id = ?`, [name, id], function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        res.json({ success: true });
+      });
+    } else if (signer === 'approver') {
+      // only operator/admin can sign as approver
+      if (!(req.session.user && (req.session.user.role === 'operator' || req.session.user.role === 'admin'))) return res.status(403).json({ error: 'Forbidden' });
+      db.run(`UPDATE blank_card_requests SET approver_name = ?, approver_signed_at = CURRENT_TIMESTAMP WHERE id = ?`, [name, id], function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        res.json({ success: true });
+      });
+    } else {
+      return res.status(400).json({ error: 'Invalid signer' });
+    }
+  });
+});
+
 // Issue blank cards to personalization (Store -> Perso). Reduces stock immediately.
 app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin']), (req, res) => {
   const { qty, issued_to, reference, notes } = req.body;
@@ -993,6 +1048,108 @@ app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin']), (req
       res.json({ success: true, id: this.lastID });
     });
   }, checkUserId);
+});
+
+// Printable Card Request Form
+app.get('/forms/print-request', requireLogin, (req, res) => {
+  const id = req.query.id;
+  if (!id) return res.status(400).send('Missing id');
+  db.get(`SELECT r.*, u.username as requester, a.username as approver FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id LEFT JOIN users a ON r.approver_id = a.id WHERE r.id = ?`, [id], (err, row) => {
+    if (err) return res.status(500).send('DB error');
+    if (!row) return res.status(404).send('Request not found');
+
+    const html = `<!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>Card Request #${row.id}</title>
+      <link rel="stylesheet" href="/vendor/bootstrap/dist/css/bootstrap.min.css">
+      <link rel="stylesheet" href="/forms/forms.css">
+    </head>
+    <body>
+      <div class="form-header">
+        <h1>ENBIC Card Request Form</h1>
+        <div class="form-sub">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</div>
+      </div>
+      <div class="form-body">
+        <div style="display:flex;justify-content:space-between;">
+          <div class="small"><strong>Requester:</strong> ${escapeHtml(row.requester || '')}</div>
+          <div class="small"><strong>Date:</strong> ${escapeHtml(row.created_at || '')}</div>
+        </div>
+
+        <div class="section-title">Personal Information</div>
+        <div class="field-row"><div class="field-label">Full Name</div><div class="field-input">${escapeHtml(row.requester || '')}</div></div>
+        <div class="field-row"><div class="field-label">Number of Cards Requested</div><div class="field-input">${row.quantity}</div></div>
+        <div class="field-row"><div class="field-label">Phone / Contact</div><div class="field-input">${escapeHtml(row.contact || '')}</div></div>
+        <div class="field-row"><div class="field-label">Signature</div><div class="field-input"></div></div>
+        <div class="field-row"><div class="field-label">Justification / Remarks</div><div class="field-input">${escapeHtml(row.reason || '')}</div></div>
+
+        <hr />
+        <div class="section-title">Approval</div>
+        <div class="small">By the Approver</div>
+        <div class="field-row"><div class="field-label">Approved</div><div class="field-input">${row.status === 'approved' ? '✓' : ''}</div></div>
+        <div class="field-row"><div class="field-label">Quantity Approved</div><div class="field-input">${row.approved_qty || ''}</div></div>
+        <div class="field-row"><div class="field-label">Approval Date</div><div class="field-input">${escapeHtml(row.updated_at || '')}</div></div>
+        <div class="field-row"><div class="field-label">Approver Name & Signature</div><div class="field-input">${escapeHtml(row.approver || '')}</div></div>
+      </div>
+      <div style="max-width:800px;margin:18px auto;text-align:center;" class="no-print">
+        <button onclick="window.print()" class="btn btn-primary">Print</button>
+      </div>
+    </body>
+    </html>`;
+
+    res.send(html);
+  });
+});
+
+// Printable Card Issuance & Acknowledgement Form (issue note)
+app.get('/forms/print-issue', requireLogin, (req, res) => {
+  const id = req.query.id;
+  if (!id) return res.status(400).send('Missing id');
+  db.get(`SELECT i.*, r.requester_id, u.username as requester, r.quantity as requested_qty FROM issue_notes i LEFT JOIN blank_card_requests r ON i.request_id = r.id LEFT JOIN users u ON r.requester_id = u.id WHERE i.id = ?`, [id], (err, row) => {
+    if (err) return res.status(500).send('DB error');
+    if (!row) return res.status(404).send('Issue note not found');
+
+    const html = `<!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>Issue Note #${row.id}</title>
+      <link rel="stylesheet" href="/vendor/bootstrap/dist/css/bootstrap.min.css">
+      <link rel="stylesheet" href="/forms/forms.css">
+    </head>
+    <body>
+      <div class="form-header">
+        <h1>CARD ISSUANCE & ACKNOWLEDGEMENT FORM</h1>
+        <div class="form-sub">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</div>
+      </div>
+      <div class="form-body">
+        <div style="display:flex;justify-content:space-between;">
+          <div class="small"><strong>Officer:</strong> ${escapeHtml(row.requester || '')}</div>
+          <div class="small"><strong>Date:</strong> ${escapeHtml(row.created_at || '')}</div>
+        </div>
+
+        <p class="small">OFFICER ACCOUNTABILITY & RESPONSIBILITY AGREEMENT</p>
+        <p class="small">I, <strong>${escapeHtml(row.requester || '')}</strong>, acknowledge that I have received a total of <strong>${row.quantity}</strong> blank ENBIC cards under Issue ID <strong>${row.id}</strong> for the purpose of personalization.</p>
+        <ol class="small">
+          <li>I am solely responsible for every card issued to me from the moment of receipt until the point of successful personalization or official return.</li>
+          <li>I shall handle all cards with the highest level of care, professionalism, and security.</li>
+          <li>I acknowledge that any card damaged due to negligence or misconduct may result in financial accountability.</li>
+        </ol>
+
+        <div style="margin-top:18px;"><div><strong>Officer Signature:</strong></div><div class="signature-line"></div></div>
+        <div style="margin-top:12px;"><div><strong>Supervisor Signature:</strong></div><div class="signature-line"></div></div>
+      </div>
+      <div style="max-width:800px;margin:18px auto;text-align:center;" class="no-print">
+        <button onclick="window.print()" class="btn btn-primary">Print</button>
+      </div>
+    </body>
+    </html>`;
+
+    res.send(html);
+  });
 });
 
 // Reconciliation view: opening + received - issued - damaged/lost = expected

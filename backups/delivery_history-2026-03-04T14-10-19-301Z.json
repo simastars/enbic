@@ -1,0 +1,128 @@
+[
+  {
+    "id": 1,
+    "state": "Sokoto",
+    "delivery_date": "2026-01-19 16:26:31",
+    "arn_count": 2,
+    "operator_notes": "today 19/01/2026 sokoto state cards has been carried for delivery"
+  },
+  {
+    "id": 2,
+    "state": "Goa",
+    "delivery_date": "2026-01-21 18:07:40",
+    "arn_count": 2,
+    "operator_notes": ""
+  },
+  {
+    "id": 3,
+    "state": "Sokoto",
+    "delivery_date": "2026-01-29 16:32:44",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 4,
+    "state": "Bauchi",
+    "delivery_date": "2026-02-17 12:35:50",
+    "arn_count": 2,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 5,
+    "state": "Goa",
+    "delivery_date": "2026-02-17 13:59:15",
+    "arn_count": 1,
+    "operator_notes": ""
+  },
+  {
+    "id": 6,
+    "state": "Ikoyi",
+    "delivery_date": "2026-02-17 14:14:17",
+    "arn_count": 2,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 7,
+    "state": "Andhra Pradesh",
+    "delivery_date": "2026-02-17 14:25:31",
+    "arn_count": 2,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 8,
+    "state": "Chandigarh",
+    "delivery_date": "2026-02-17 14:37:20",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 9,
+    "state": "Chandigarh",
+    "delivery_date": "2026-02-17 14:43:35",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 10,
+    "state": "Karnataka",
+    "delivery_date": "2026-02-23 14:01:15",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 11,
+    "state": "Karnataka",
+    "delivery_date": "2026-02-23 14:38:48",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 12,
+    "state": "Ikoyi",
+    "delivery_date": "2026-02-23 14:42:09",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 13,
+    "state": "Ikoyi",
+    "delivery_date": "2026-02-23 14:43:24",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 14,
+    "state": "Bauchi",
+    "delivery_date": "2026-02-23 15:01:42",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 15,
+    "state": "Ikoyi",
+    "delivery_date": "2026-02-26 15:55:17",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 16,
+    "state": "Bauchi",
+    "delivery_date": "2026-02-26 15:56:03",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  },
+  {
+    "id": 17,
+    "state": "Sokoto",
+    "delivery_date": "2026-02-26 15:59:06",
+    "arn_count": 2,
+    "operator_notes": ""
+  },
+  {
+    "id": 18,
+    "state": "Ikoyi",
+    "delivery_date": "2026-02-26 16:30:18",
+    "arn_count": 1,
+    "operator_notes": "Delivered via dispatch confirmation"
+  }
+]

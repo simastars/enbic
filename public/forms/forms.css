@@ -1,0 +1,12 @@
+/* Printable forms styles inspired by provided images */
+body { font-family: Arial, Helvetica, sans-serif; color:#222; }
+.form-header { background:#4a4a4a; color:#fff; padding:18px 24px; text-align:center; }
+.form-sub { font-size:12px; color:#ddd; margin-top:6px; }
+.form-body { padding:20px 28px; max-width:800px; margin:0 auto; }
+.field-row { display:flex; gap:12px; margin-bottom:12px; align-items:center; }
+.field-label { width:220px; font-weight:700; }
+.field-input { flex:1; background:#f6f6f6; padding:10px; border-radius:4px; min-height:28px; }
+.section-title { font-weight:800; margin-top:18px; margin-bottom:8px; }
+.signature-line { border-top:1px solid #333; width:60%; margin-top:18px; }
+.small { font-size:13px; color:#444; }
+@media print { .no-print { display:none !important; } }

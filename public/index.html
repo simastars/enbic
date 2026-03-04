@@ -4,7 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ENBIC Tracking System</title>
+    <link rel="stylesheet" href="/vendor/bootstrap/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="styles.css">
+    <style>
+        .sidebar-item-group .sidebar-submenu { display: none; }
+        .sidebar-item-group.active .sidebar-submenu { display: block; }
+        .sidebar-submenu select { width: 100%; box-sizing: border-box; }
+    </style>
 </head>
 <body>
     <div class="layout-wrapper">
@@ -20,29 +26,46 @@
         </header>
 
         <div class="main-container">
-            <nav class="sidebar">
-                <div class="sidebar-menu">
-                    <button class="sidebar-item active" data-view="dashboard">
+            <nav class="sidebar p-2">
+                <div class="sidebar-menu list-group">
+                    <button class="sidebar-item list-group-item list-group-item-action active" data-view="dashboard">
                         <span class="sidebar-icon">📊</span>
                         <span class="sidebar-label">Dashboard</span>
                     </button>
-                    <button class="sidebar-item" data-view="arns">
+                    <button class="sidebar-item list-group-item list-group-item-action" data-view="arns">
                         <span class="sidebar-icon">🏷️</span>
                         <span class="sidebar-label">ARN Management</span>
                     </button>
-                    <button class="sidebar-item" data-view="delivery">
+                    <button class="sidebar-item list-group-item list-group-item-action" data-view="delivery">
                         <span class="sidebar-icon">📦</span>
                         <span class="sidebar-label">Delivery</span>
                     </button>
-                    <button class="sidebar-item" data-view="states">
+                    <button class="sidebar-item list-group-item list-group-item-action" data-view="states">
                         <span class="sidebar-icon">🗺️</span>
                         <span class="sidebar-label">States</span>
                     </button>
-                    <button class="sidebar-item" data-view="inventory">
-                        <span class="sidebar-icon">📋</span>
-                        <span class="sidebar-label">Inventory</span>
-                    </button>
-                    <button class="sidebar-item" data-view="reports">
+                    <div class="sidebar-item-group">
+                        <button class="sidebar-item list-group-item list-group-item-action" data-view="inventory">     
+                            <span class="sidebar-icon">📋</span>
+                            <span class="sidebar-label">Inventory</span>
+                        </button>
+                        <div class="sidebar-submenu" style="padding:6px 8px;">
+                            <div class="list-group">
+                                <button type="button" class="list-group-item list-group-item-action submenu-item active" data-section="all">All Sections</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="blank-overview">Blank Card Overview</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="receive-blank">Receive Blank Cards</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="receive-personalized">Receive Personalized Cards</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="pickup">Record SHQ Pickup</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="issue-personalization">Issue To Personalization</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="requests">Requests</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="admin-restock">Admin Restock</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="ledger">Ledger / Movements</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="issue-notes">Issue Notes</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="reconciliation">Reconciliation</button>
+                            </div>
+                        </div>
+                    </div>
+                    <button class="sidebar-item list-group-item list-group-item-action" data-view="reports">
                         <span class="sidebar-icon">📈</span>
                         <span class="sidebar-label">Reports</span>
                     </button>
@@ -191,9 +214,10 @@
                 <div id="inventory" class="view-content">
                     <div class="view-header">
                         <h2>Inventory</h2>
+                        
                     </div>
-                    <div class="sections-container">
-                        <div class="section">
+                    <div class="sections-container row">
+                                <div class="section card p-3 mb-3 col-12" data-section="blank-overview">
                             <h3>Blank Card Inventory</h3>
                             <div style="display:flex;gap:12px;align-items:center;">
                                 <div><strong>Current Balance:</strong> <span id="inventoryBalanceTotal">0</span></div>
@@ -201,7 +225,7 @@
                             </div>
                         </div>
 
-                        <div class="section">
+                        <div class="section card p-3 mb-3 col-12" data-section="receive-blank">
                             <h3>Receive Blank Cards</h3>
                             <form id="receiveForm" class="form-inline">
                                 <input type="number" id="receiveQty" placeholder="Quantity" required>
@@ -211,7 +235,7 @@
                             </form>
                         </div>
 
-                        <div class="section">
+                        <div class="section card p-3 mb-3 col-12" data-section="receive-personalized">
                             <h3>Receive Personalized Cards into Store</h3>
                             <p class="info-text">Paste ARNs (one per line) or comma-separated. Optionally set state.</p>
                             <textarea id="receiveArnsInput" rows="4" placeholder="ARN1\nARN2\n..."></textarea>
@@ -222,7 +246,7 @@
                             <div id="receiveArnsResult" style="margin-top:8px"></div>
                         </div>
 
-                        <div class="section">
+                        <div class="section card p-3 mb-3 col-12" data-section="pickup">
                             <h3>Record SHQ Pickup</h3>
                             <p class="info-text">Mark ARNs or Document Numbers as collected at SHQ. Paste one identifier per line (ARN or Doc No) and provide collector details.</p>
                                 <textarea id="pickupArnsInput" rows="3" placeholder="ARN_or_DocNo_1\nARN_or_DocNo_2"></textarea>
@@ -233,7 +257,7 @@
                             <div id="pickupArnsResult" style="margin-top:8px"></div>
                         </div>
 
-                        <div class="section">
+                        <div class="section card p-3 mb-3 col-12" data-section="issue-personalization">
                             <h3>Issue To Personalization</h3>
                             <form id="issuePersoForm" class="form-inline">
                                 <input type="number" id="issueQty" placeholder="Quantity" required>
@@ -243,7 +267,7 @@
                             </form>
                         </div>
 
-                        <div class="section">
+                        <div class="section card p-3 mb-3 col-12" data-section="requests">
                             <h3>Requests (Store Officer)</h3>
                             <div style="background:#f0f8ff;padding:10px;border-radius:4px;margin-bottom:12px;font-size:13px;border-left:4px solid #3498db;">
                                 <strong>Store Officer:</strong> Submit blank card requests. Your requests will appear below with their approval status.<br/>
@@ -258,7 +282,7 @@
                             <div id="requestsList" style="margin-top:12px"></div>
                         </div>
 
-                        <div class="section" id="adminRestockSection" style="display:none;">
+                        <div class="section card p-3 mb-3 col-12" id="adminRestockSection" data-section="admin-restock" style="display:none;">
                             <h3>Restock Central Inventory (Admin Only)</h3>
                             <div style="background:#fff3cd;padding:10px;border-radius:4px;margin-bottom:12px;font-size:13px;border-left:4px solid #ffc107;">
                                 <strong>Add blank cards to the central inventory pool.</strong> This is where approved officer requests are deducted from and distributed.
@@ -272,7 +296,7 @@
                             <div id="restockResult" style="margin-top:8px"></div>
                         </div>
 
-                        <div class="section">
+                        <div class="section card p-3 mb-3 col-12" data-section="ledger">
                             <h3>Ledger / Movements</h3>
                             <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;">
                                 <button id="refreshLedger" class="btn btn-secondary">Refresh Ledger</button>
@@ -280,12 +304,12 @@
                             <div id="inventoryLedger"></div>
                         </div>
 
-                        <div class="section">
+                        <div class="section card p-3 mb-3 col-12" data-section="issue-notes">
                             <h3>Issue Notes</h3>
                             <div id="issueNotesList"></div>
                         </div>
 
-                        <div class="section">
+                        <div class="section card p-3 mb-3 col-12" data-section="reconciliation">
                             <h3>Reconciliation</h3>
                             <div id="reconResult"></div>
                             <button id="refreshRecon" class="btn">Refresh Reconciliation</button>
@@ -387,6 +411,7 @@
         </div>
     </div>
 
+    <script src="/vendor/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
