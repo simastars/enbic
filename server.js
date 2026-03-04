@@ -75,6 +75,23 @@ db.serialize(() => {
       }
     }
   });
+
+  // Add signature columns to blank_card_requests if they don't exist
+  db.all(`PRAGMA table_info(blank_card_requests)`, [], (err, cols) => {
+    if (!err && cols) {
+      const names = cols.map(c => c.name);
+      if (!names.includes('officer_signature')) {
+        console.log('Adding signature columns to blank_card_requests...');
+        db.run(`ALTER TABLE blank_card_requests ADD COLUMN officer_signature TEXT`, (alterErr) => {
+          if (alterErr) console.warn('Could not add officer_signature column:', alterErr.message);
+        });
+        db.run(`ALTER TABLE blank_card_requests ADD COLUMN officer_signed_at DATETIME`);
+        db.run(`ALTER TABLE blank_card_requests ADD COLUMN admin_signature TEXT`);
+        db.run(`ALTER TABLE blank_card_requests ADD COLUMN admin_signed_at DATETIME`);
+        db.run(`ALTER TABLE blank_card_requests ADD COLUMN form_data TEXT`);
+      }
+    }
+  });
 });
 
 // Initialize database schema
@@ -274,10 +291,15 @@ function initializeDatabase() {
       quantity INTEGER NOT NULL,
       reason TEXT,
       needed_by DATE,
-      status TEXT DEFAULT 'pending', -- pending, approved, partially_approved, rejected
+      status TEXT DEFAULT 'pending', -- pending, approved, partially_approved, rejected, officer_signed, fully_signed
       approved_qty INTEGER DEFAULT 0,
       approver_id INTEGER,
       decision_note TEXT,
+      officer_signature TEXT,
+      officer_signed_at DATETIME,
+      admin_signature TEXT,
+      admin_signed_at DATETIME,
+      form_data TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME
     )`);
@@ -919,6 +941,254 @@ app.post('/api/inventory/requests/:id/decide', requireRole(['operator','admin'])
       });
     }
   });
+});
+
+// Get request form details (viewable by officer who created it and admins)
+app.get('/api/inventory/requests/:id/form', requireLogin, (req, res) => {
+  const id = req.params.id;
+  const userId = req.session.user ? req.session.user.id : null;
+  const userRole = req.session.user ? req.session.user.role : null;
+  
+  db.get(`SELECT r.*, u.username as requester_name FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id WHERE r.id = ?`, [id], (err, req_row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!req_row) return res.status(404).json({ error: 'Request not found' });
+    
+    // Check permissions: officer can only see their own, admin/operator can see all
+    if (userRole !== 'admin' && userRole !== 'operator' && req_row.requester_id !== userId) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+    
+    res.json(req_row);
+  });
+});
+
+// Sign request form (officer signature)
+app.post('/api/inventory/requests/:id/sign-officer', requireRole(['officer']), (req, res) => {
+  const id = req.params.id;
+  const { signature_data } = req.body;
+  const userId = req.session.user ? req.session.user.id : null;
+  
+  if (!signature_data) return res.status(400).json({ error: 'Signature required' });
+  // prevent blank placeholder signature
+  const blankImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  if (signature_data.trim() === '' || signature_data === blankImage) {
+    return res.status(400).json({ error: 'Valid signature required' });
+  }
+  
+  db.get(`SELECT * FROM blank_card_requests WHERE id = ?`, [id], (err, req_row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!req_row) return res.status(404).json({ error: 'Request not found' });
+    
+    // Only requester can sign
+    if (req_row.requester_id !== userId) {
+      return res.status(403).json({ error: 'Only the requester can sign this form' });
+    }
+    
+    const now = moment().format('YYYY-MM-DD HH:mm:ss');
+    db.run(
+      `UPDATE blank_card_requests SET officer_signature = ?, officer_signed_at = ?, status = 'officer_signed', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [signature_data, now, id],
+      function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        logAudit(null, 'REQUEST_OFFICER_SIGNED', req_row.status, `Request ${id}`);
+        res.json({ success: true, message: 'Request form signed by officer' });
+      }
+    );
+  });
+});
+
+// Countersign request form (admin/operator signature)
+app.post('/api/inventory/requests/:id/sign-admin', requireRole(['admin','operator']), (req, res) => {
+  const id = req.params.id;
+  const { signature_data } = req.body;
+  const userId = req.session.user ? req.session.user.id : null;
+  
+  if (!signature_data) return res.status(400).json({ error: 'Signature required' });
+  const blankImage = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  if (signature_data.trim() === '' || signature_data === blankImage) {
+    return res.status(400).json({ error: 'Valid signature required' });
+  }
+  
+  db.get(`SELECT * FROM blank_card_requests WHERE id = ?`, [id], (err, req_row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!req_row) return res.status(404).json({ error: 'Request not found' });
+    
+    // Request must be officer-signed first
+    if (!req_row.officer_signature) {
+      return res.status(400).json({ error: 'Request must be signed by officer first' });
+    }
+    
+    const now = moment().format('YYYY-MM-DD HH:mm:ss');
+    db.run(
+      `UPDATE blank_card_requests SET admin_signature = ?, admin_signed_at = ?, status = 'fully_signed', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [signature_data, now, id],
+      function(err2) {
+        if (err2) return res.status(500).json({ error: err2.message });
+        logAudit(null, 'REQUEST_ADMIN_SIGNED', req_row.status, `Request ${id}`);
+        res.json({ success: true, message: 'Request form countersigned by admin' });
+      }
+    );
+  });
+});
+
+// Download request form as PDF
+app.get('/api/inventory/requests/:id/download-form', requireLogin, (req, res) => {
+  const id = req.params.id;
+  const userId = req.session.user ? req.session.user.id : null;
+  const userRole = req.session.user ? req.session.user.role : null;
+  
+  db.get(
+    `SELECT r.*, u.username as requester_name, a.username as approver_name 
+     FROM blank_card_requests r 
+     LEFT JOIN users u ON r.requester_id = u.id 
+     LEFT JOIN users a ON r.approver_id = a.id 
+     WHERE r.id = ?`,
+    [id],
+    (err, req_row) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!req_row) return res.status(404).json({ error: 'Request not found' });
+      
+      // Check permissions
+      if (userRole !== 'admin' && userRole !== 'operator' && req_row.requester_id !== userId) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+      
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      doc.on('error', pdfErr => {
+        console.error('PDFDocument error while generating request form:', pdfErr);
+        try {
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to generate PDF form' });
+          } else {
+            res.end();
+          }
+        } catch (e) {}
+      });
+      
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=request_form_${id}_${moment().format('YYYY-MM-DD')}.pdf`);
+      
+      doc.pipe(res);
+      
+      // Header
+      doc.fontSize(18).font('Helvetica-Bold').text('BLANK CARD REQUEST FORM', { align: 'center' });
+      doc.moveDown(0.5);
+      doc.fontSize(10).font('Helvetica').text(`Request ID: ${id}`, { align: 'center' });
+      doc.fontSize(10).text(`Generated: ${moment().format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
+      doc.moveDown();
+      
+      // Request Details Section
+      doc.fontSize(12).font('Helvetica-Bold').text('REQUEST DETAILS', { underline: true });
+      doc.moveDown(0.5);
+      doc.fontSize(10).font('Helvetica');
+      
+      const qtyNum = Number(req_row.quantity);
+      const detailsTable = [
+        ['Requester:', req_row.requester_name || 'N/A'],
+        ['Quantity Requested:', isNaN(qtyNum) ? 'N/A' : qtyNum.toString()],
+        ['Needed By:', req_row.needed_by || 'N/A'],
+        ['Reason:', req_row.reason || 'N/A'],
+        ['Date Created:', moment(req_row.created_at).format('YYYY-MM-DD HH:mm:ss')]
+      ];
+      
+      detailsTable.forEach(([label, value]) => {
+        doc.font('Helvetica-Bold').text(label, 50, { width: 150 });
+        doc.font('Helvetica').text(value, 200, { width: 300 });
+        doc.moveDown(0.4);
+      });
+      
+      doc.moveDown();
+      
+      // Approval Details Section (if approved)
+      if (req_row.status !== 'pending') {
+        doc.fontSize(12).font('Helvetica-Bold').text('APPROVAL DETAILS', { underline: true });
+        doc.moveDown(0.5);
+        doc.fontSize(10).font('Helvetica');
+        
+        doc.font('Helvetica-Bold').text('Status:', 50);
+        doc.font('Helvetica').text(req_row.status.toUpperCase().replace(/_/g, ' '), 200);
+        doc.moveDown(0.4);
+        
+        if (req_row.approver_name) {
+          doc.font('Helvetica-Bold').text('Approved By:', 50);
+          doc.font('Helvetica').text(req_row.approver_name, 200);
+          doc.moveDown(0.4);
+        }
+        
+        if (req_row.approved_qty !== null && req_row.approved_qty !== undefined) {
+          const approvedNum = Number(req_row.approved_qty);
+          doc.font('Helvetica-Bold').text('Approved Quantity:', 50);
+          doc.font('Helvetica').text(isNaN(approvedNum) ? 'N/A' : approvedNum.toString(), 200);
+          doc.moveDown(0.4);
+        }
+        
+        if (req_row.decision_note) {
+          doc.font('Helvetica-Bold').text('Decision Note:', 50);
+          doc.font('Helvetica').text(req_row.decision_note, 200, { width: 300 });
+          doc.moveDown(0.4);
+        }
+      }
+      
+      doc.moveDown();
+      
+      // Signature Section
+      doc.fontSize(12).font('Helvetica-Bold').text('SIGNATURES', { underline: true });
+      doc.moveDown(0.5);
+      
+      // Officer Signature
+      doc.fontSize(10).font('Helvetica-Bold').text('OFFICER SIGNATURE:', 50);
+      doc.moveDown(0.3);
+      if (req_row.officer_signature) {
+        doc.moveDown(0.5);
+        // Draw signature image
+        try {
+          const sigBufferData = req_row.officer_signature.replace(/^data:image\/png;base64,/, '');
+          if (sigBufferData && sigBufferData.length > 50) {
+            const sigBuffer = Buffer.from(sigBufferData, 'base64');
+            doc.image(sigBuffer, 50, doc.y, { width: 150, height: 60 });
+            doc.moveDown(2.5);
+          } else {
+            throw new Error('invalid signature data');
+          }
+        } catch (sigerr) {
+          console.error('Failed to render officer signature in PDF:', sigerr.message);
+          doc.font('Helvetica').text('[Signature unavailable]');
+          doc.moveDown(1);
+        }
+        doc.fontSize(9).font('Helvetica').text(`Signed: ${moment(req_row.officer_signed_at).format('YYYY-MM-DD HH:mm:ss')}`, 50);
+      } else {
+        doc.font('Helvetica').text('[Not signed yet]', 50);
+      }
+      doc.moveDown(1);
+      
+      // Admin Signature
+      doc.fontSize(10).font('Helvetica-Bold').text('ADMIN COUNTERSIGNATURE:', 50);
+      doc.moveDown(0.3);
+      if (req_row.admin_signature) {
+        doc.moveDown(0.5);
+        // Draw signature image
+        try {
+          const sigBufferData = req_row.admin_signature.replace(/^data:image\/png;base64,/, '');
+          if (sigBufferData && sigBufferData.length > 50) {
+            const sigBuffer = Buffer.from(sigBufferData, 'base64');
+            doc.image(sigBuffer, 50, doc.y, { width: 150, height: 60 });
+            doc.moveDown(2.5);
+          } else {
+            throw new Error('invalid signature data');
+          }
+        } catch (sigerr) {
+          console.error('Failed to render admin signature in PDF:', sigerr.message);
+          doc.font('Helvetica').text('[Signature unavailable]');
+          doc.moveDown(1);
+        }
+        doc.fontSize(9).font('Helvetica').text(`Signed: ${moment(req_row.admin_signed_at).format('YYYY-MM-DD HH:mm:ss')}`, 50);
+      } else {
+        doc.font('Helvetica').text('[Not signed yet]', 50);
+      }
+      
+      doc.end();
+    }
+  );
 });
 
 // Generate Issue Note for an approved request
@@ -2092,24 +2362,31 @@ app.get('/api/export/pdf/:type', requireRole(['operator','admin','supervisor']),
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename=enbic_report_${type}_${moment().format('YYYY-MM-DD')}.pdf`);
       
-      doc.pipe(res);
-      doc.fontSize(20).text('ENBIC Report', { align: 'center' });
-      doc.moveDown();
-      doc.fontSize(12).text(`Report Type: ${type}`, { align: 'center' });
-      doc.text(`Generated: ${moment().format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
-      doc.moveDown();
+      try {
+        doc.pipe(res);
+        doc.fontSize(20).text('ENBIC Report', { align: 'center' });
+        doc.moveDown();
+        doc.fontSize(12).text(`Report Type: ${type}`, { align: 'center' });
+        doc.text(`Generated: ${moment().format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
+        doc.moveDown();
 
-      if (rows.length === 0) {
-        doc.text('No records found.');
-      } else {
-        doc.fontSize(10);
-        rows.forEach((row, index) => {
-          doc.text(`${index + 1}. ARN: ${row.arn} | State: ${row.state} | Status: ${row.status}`);
-          doc.moveDown(0.5);
-        });
+        if (rows.length === 0) {
+          doc.text('No records found.');
+        } else {
+          doc.fontSize(10);
+          rows.forEach((row, index) => {
+            doc.text(`${index + 1}. ARN: ${row.arn} | State: ${row.state} | Status: ${row.status}`);
+            doc.moveDown(0.5);
+          });
+        }
+
+        doc.end();
+      } catch (pdfErr) {
+        console.error('Error generating PDF report:', pdfErr);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Failed to generate PDF report' });
+        }
       }
-
-      doc.end();
     }
   );
 });
