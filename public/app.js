@@ -844,7 +844,7 @@ async function loadRequests() {
                         ${r.decision_note ? `<div style="margin-top:6px;font-size:12px;color:#666;">Decision: ${r.decision_note}</div>` : ''}
                         <div style="margin-top:8px;display:flex;gap:8px;">
                             <button class="btn btn-sm" style="padding:4px 10px;font-size:11px;" onclick="viewRequestForm(${r.id})">View Form</button>
-                            <button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:11px;display:${r.status === 'approved' && !r.officer_signature ? 'inline-block' : 'none'};" onclick="openOfficerSignModal(${r.id})">Sign Form</button>
+                            <button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:11px;display:${(r.status === 'approved' || r.status === 'partially_approved') && !r.officer_signature ? 'inline-block' : 'none'};" onclick="openOfficerSignModal(${r.id})">Sign Form</button>
                             <button class="btn btn-secondary btn-sm" style="padding:4px 10px;font-size:11px;display:${r.officer_signature ? 'inline-block' : 'none'};" onclick="downloadRequestForm(${r.id})">Download</button>
                         </div>
                     </div>`;
