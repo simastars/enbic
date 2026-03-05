@@ -835,16 +835,8 @@ async function loadRequests() {
                                 <span style="margin-left:12px;color:#666;">Qty: <strong>${r.quantity}</strong></span>
                                 <span style="margin-left:12px;color:#666;">Needed by: <strong>${r.needed_by || 'N/A'}</strong></span>
                             </div>
-<<<<<<< HEAD
-                            <div style="text-align:right;">
-                                <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;">${r.status.toUpperCase()}</span>
-                                <div style="margin-top:8px;">
-                                    <button class="btn btn-sm btn-outline-secondary" onclick='openRequestModal(${JSON.stringify(r).replace(/'/g, "\\'")})'>View</button>
-                                </div>
-=======
                             <div>
                                 <span style="display:inline-block;padding:4px 10px;background:${statusColor};color:white;border-radius:4px;font-weight:bold;font-size:12px;margin-right:8px;">${r.status.toUpperCase().replace(/_/g, ' ')}</span>
->>>>>>> 14195c294372c2ff92060a136c5756e278a3602b
                             </div>
                         </div>
                         ${r.reason ? `<div style="margin-top:6px;font-size:12px;color:#666;">Reason: ${r.reason}</div>` : ''}
@@ -886,14 +878,9 @@ async function loadRequests() {
                                 <div style="display:flex;gap:4px;flex-direction:column;">
                                     <button class="btn btn-sm" style="padding:4px 8px;font-size:11px;" onclick="viewRequestForm(${r.id})">View Form</button>
                                     <button class="btn btn-sm" style="padding:4px 8px;font-size:11px;" onclick="openDecideModal(${r.id}, '${r.status}', ${r.quantity}, '${r.requester || 'N/A'}')" ${r.status === 'pending' ? '' : 'disabled'}>Decide</button>
-<<<<<<< HEAD
-                                    <button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:11px;" onclick="generateIssue(${r.id})" ${r.status === 'approved' || r.status === 'partially_approved' ? '' : 'disabled'}>Generate Issue</button>
-                                    <button class="btn btn-sm btn-outline-secondary" style="padding:4px 8px;font-size:11px;" onclick='openRequestModal(${JSON.stringify(r).replace(/'/g, "\\'")})'>View</button>
-=======
                                     <button class="btn btn-primary btn-sm" style="padding:4px 8px;font-size:11px;display:${r.officer_signature && !r.admin_signature ? 'inline-block' : 'none'};" onclick="openAdminSignModal(${r.id})">Countersign</button>
                                     <button class="btn btn-secondary btn-sm" style="padding:4px 8px;font-size:11px;" onclick="downloadRequestForm(${r.id})">Download</button>
                                     <button class="btn btn-sm" style="padding:4px 8px;font-size:11px;" onclick="generateIssue(${r.id})" ${r.status === 'approved' || r.status === 'partially_approved' ? '' : 'disabled'}>Generate Issue</button>
->>>>>>> 14195c294372c2ff92060a136c5756e278a3602b
                                 </div>
                             </div>
                         </div>

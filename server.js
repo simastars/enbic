@@ -1092,8 +1092,8 @@ app.get('/api/inventory/requests/:id/download-form', requireLogin, (req, res) =>
       ];
       
       detailsTable.forEach(([label, value]) => {
-        doc.font('Helvetica-Bold').text(label, 50, { width: 150 });
-        doc.font('Helvetica').text(value, 200, { width: 300 });
+        doc.font('Helvetica-Bold').text(label, 50, doc.y, { width: 150 });
+        doc.font('Helvetica').text(value, 200, doc.y, { width: 300 });
         doc.moveDown(0.4);
       });
       
@@ -1123,8 +1123,8 @@ app.get('/api/inventory/requests/:id/download-form', requireLogin, (req, res) =>
         }
         
         if (req_row.decision_note) {
-          doc.font('Helvetica-Bold').text('Decision Note:', 50);
-          doc.font('Helvetica').text(req_row.decision_note, 200, { width: 300 });
+          doc.font('Helvetica-Bold').text('Decision Note:', 50, doc.y);
+          doc.font('Helvetica').text(req_row.decision_note, 200, doc.y, { width: 300 });
           doc.moveDown(0.4);
         }
       }
