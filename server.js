@@ -2132,6 +2132,7 @@ app.get('/api/reminders', requireRole(['operator','admin','supervisor']), (req, 
     FROM reminders r
     JOIN arns a ON r.arn = a.arn
     WHERE r.resolved_at IS NULL
+      AND a.status != 'Collected at SHQ'
     ORDER BY r.created_at DESC
   `;
 

@@ -1256,8 +1256,11 @@ async function loadReminders() {
         const reminders = await response.json();
 
         const container = document.getElementById('remindersList');
-        // exclude delivered reminders
-        const active = (reminders || []).filter(r => (r.status || '').toLowerCase() !== 'delivered');
+        // exclude delivered reminders and collected-at-SHQ reminders
+        const active = (reminders || []).filter(r => {
+            const s = (r.status || '').toLowerCase();
+            return s !== 'delivered' && s !== 'collected at shq';
+        });
         if (active.length === 0) {
             container.innerHTML = '<p class="info-text">No active reminders</p>';
             return;
