@@ -69,6 +69,18 @@
                         <span class="sidebar-icon">📈</span>
                         <span class="sidebar-label">Reports</span>
                     </button>
+                    <div class="sidebar-item-group">
+                        <button class="sidebar-item list-group-item list-group-item-action" data-view="settings">
+                            <span class="sidebar-icon">⚙️</span>
+                            <span class="sidebar-label">Settings</span>
+                        </button>
+                        <div class="sidebar-submenu" style="padding:6px 8px;">
+                            <div class="list-group">
+                                <a href="/admin_users.html" class="list-group-item list-group-item-action">Users</a>
+                                <button type="button" class="list-group-item list-group-item-action" data-section="app-settings">App Settings</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </nav>
 
@@ -384,6 +396,21 @@
                 </div>
             </div>
         </div>
+
+                <!-- Settings View -->
+                <div id="settings" class="view-content">
+                    <div class="view-header">
+                        <h2>Settings</h2>
+                    </div>
+                    <div class="view-sections">
+                        <div class="section">
+                            <h3>Users</h3>
+                            <p>Manage user display names and roles.</p>
+                            <p><a href="/admin_users.html" target="_blank">Open Users management in new tab</a></p>
+                            <iframe src="/admin_users.html" style="width:100%;height:520px;border:1px solid #ddd;border-radius:4px;"></iframe>
+                        </div>
+                    </div>
+                </div>
 
     <!-- Status Update Modal -->
     <div id="statusModal" class="modal">

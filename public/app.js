@@ -557,7 +557,7 @@ function updateAuthUI() {
 
     // Role-based tab visibility
     const allowedTabs = {
-        admin: ['dashboard','arns','delivery','states','reports','inventory'],
+        admin: ['dashboard','arns','delivery','states','reports','inventory','settings'],
         operator: ['dashboard','arns','delivery','reports'],
         officer: ['dashboard','delivery','inventory'],
         supervisor: ['dashboard','reports']
@@ -2095,6 +2095,16 @@ function stopReminderAlerts() {
 
 function showAlert(message, type) {
     try {
+        // Suppress noisy auth/permission messages that appear during background refreshes
+        try {
+            const m = (message || '').toString().toLowerCase();
+            if (!m) return;
+            if (m.includes('forbidden') || m.includes('insufficient role') || m.includes('authentication required') || m.includes('unauthorized')) {
+                // do not display a popup for these common background permission messages
+                console.debug('Suppressed alert:', message);
+                return;
+            }
+        } catch (e) {}
         const alert = document.createElement('div');
         alert.className = `alert alert-${type}`;
         alert.textContent = message;
