@@ -145,6 +145,17 @@ function switchView(viewName) {
     }
     document.getElementById(viewName).classList.add('active');
 
+    // Ensure the content area is scrolled to the top when switching views
+    try {
+        const content = document.querySelector('.content-area');
+        if (content) {
+            // small timeout to allow layout to update then reset scroll
+            setTimeout(() => { content.scrollTop = 0; }, 0);
+        }
+        // also reset window scroll to top for full-page layouts
+        setTimeout(() => { window.scrollTo(0, 0); }, 0);
+    } catch (e) { /* ignore */ }
+
     // Load view-specific data
     if (viewName === 'dashboard') {
         loadDashboard();
@@ -156,6 +167,14 @@ function switchView(viewName) {
         loadStatesList();
     } else if (viewName === 'inventory') {
         loadInventoryTab();
+    } else if (viewName === 'settings') {
+        // initialize settings subviews
+        // load users list into the embedded Users table when admin
+        try {
+            if (window.initAdminUsers && currentUser && currentUser.role === 'admin') {
+                window.initAdminUsers();
+            }
+        } catch (e) { console.warn('initAdminUsers failed', e); }
     }
 }
 
@@ -541,7 +560,7 @@ async function loadInitialData() {
 let currentUser = null;
 async function fetchCurrentUser() {
     try {
-        const res = await fetch(`${API_BASE}/auth/me`);
+           const res = await fetch(`${API_BASE}/auth/me`, { credentials: 'same-origin' });
         if (!res.ok) { currentUser = null; updateAuthUI(); return; }
         const data = await res.json();
         currentUser = data.user;
@@ -2095,16 +2114,6 @@ function stopReminderAlerts() {
 
 function showAlert(message, type) {
     try {
-        // Suppress noisy auth/permission messages that appear during background refreshes
-        try {
-            const m = (message || '').toString().toLowerCase();
-            if (!m) return;
-            if (m.includes('forbidden') || m.includes('insufficient role') || m.includes('authentication required') || m.includes('unauthorized')) {
-                // do not display a popup for these common background permission messages
-                console.debug('Suppressed alert:', message);
-                return;
-            }
-        } catch (e) {}
         const alert = document.createElement('div');
         alert.className = `alert alert-${type}`;
         alert.textContent = message;

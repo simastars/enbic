@@ -50,7 +50,7 @@ async function onEdit(e) {
   alert('Updated');
 }
 
-(async function init(){
+window.initAdminUsers = async function initAdminUsers() {
   const users = await fetchUsers();
   render(users);
-})();
+};
