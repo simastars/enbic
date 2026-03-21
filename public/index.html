@@ -57,6 +57,7 @@
                                 <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="receive-personalized">Receive Personalized Cards</button>
                                 <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="pickup">Record SHQ Pickup</button>
                                 <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="issue-personalization">Issue To Personalization</button>
+                                <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="damaged-cards">Damaged Cards</button>
                                 <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="requests">Requests</button>
                                 <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="admin-restock">Admin Restock</button>
                                 <button type="button" class="list-group-item list-group-item-action submenu-item" data-section="ledger">Ledger / Movements</button>
@@ -69,6 +70,18 @@
                         <span class="sidebar-icon">📈</span>
                         <span class="sidebar-label">Reports</span>
                     </button>
+                    <div class="sidebar-item-group">
+                        <button class="sidebar-item list-group-item list-group-item-action" data-view="settings">
+                            <span class="sidebar-icon">⚙️</span>
+                            <span class="sidebar-label">Settings</span>
+                        </button>
+                        <div class="sidebar-submenu" style="padding:6px 8px;">
+                            <div class="list-group">
+                                <a href="/admin_users.html" class="list-group-item list-group-item-action">Users</a>
+                                <button type="button" class="list-group-item list-group-item-action" data-section="app-settings">App Settings</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </nav>
 
@@ -267,6 +280,19 @@
                             </form>
                         </div>
 
+                        <div class="section card p-3 mb-3 col-12" data-section="damaged-cards">
+                            <h3>Damaged Cards In Personalization Room</h3>
+                            <p class="info-text">Report damaged cards independently of any applicant or ARN. Each report is recorded separately and deducted from the available stock in the personalization room.</p>
+                            <form id="damagedCardForm" class="form-inline">
+                                <input type="number" id="damagedQty" placeholder="Quantity" required min="1">
+                                <input type="text" id="damagedReason" placeholder="Reason" required>
+                                <input type="text" id="damagedBatchRef" placeholder="Run/Batch ref">
+                                <input type="text" id="damagedNotes" placeholder="Notes">
+                                <button type="submit" class="btn btn-danger">Report Damaged Cards</button>
+                            </form>
+                            <div id="damagedCardsList" style="margin-top:12px"></div>
+                        </div>
+
                         <div class="section card p-3 mb-3 col-12" data-section="requests">
                             <h3>Requests (Store Officer)</h3>
                             <div style="background:#f0f8ff;padding:10px;border-radius:4px;margin-bottom:12px;font-size:13px;border-left:4px solid #3498db;">
@@ -382,8 +408,36 @@
                         </div>
                     </div>
                 </div>
+                <!-- Settings View -->
+                <div id="settings" class="view-content">
+                    <div class="view-header">
+                        <h2>Settings</h2>
+                    </div>
+                    <div class="view-sections">
+                        <div class="section">
+                            <h3>Users</h3>
+                            <p>Manage user display names and roles.</p>
+                            <div id="adminUsersContainer">
+                                <table id="usersTable" style="width:100%;border-collapse:collapse;margin-top:8px;">
+                                    <thead>
+                                        <tr style="background:#f4f4f4;padding:8px;">
+                                            <th style="padding:8px;border:1px solid #ddd;">ID</th>
+                                            <th style="padding:8px;border:1px solid #ddd;">Username</th>
+                                            <th style="padding:8px;border:1px solid #ddd;">Full Name</th>
+                                            <th style="padding:8px;border:1px solid #ddd;">Role</th>
+                                            <th style="padding:8px;border:1px solid #ddd;">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
+
+                
 
     <!-- Status Update Modal -->
     <div id="statusModal" class="modal">
@@ -412,6 +466,7 @@
     </div>
 
     <script src="/vendor/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/admin_users.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

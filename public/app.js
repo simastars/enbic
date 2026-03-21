@@ -145,6 +145,17 @@ function switchView(viewName) {
     }
     document.getElementById(viewName).classList.add('active');
 
+    // Ensure the content area is scrolled to the top when switching views
+    try {
+        const content = document.querySelector('.content-area');
+        if (content) {
+            // small timeout to allow layout to update then reset scroll
+            setTimeout(() => { content.scrollTop = 0; }, 0);
+        }
+        // also reset window scroll to top for full-page layouts
+        setTimeout(() => { window.scrollTo(0, 0); }, 0);
+    } catch (e) { /* ignore */ }
+
     // Load view-specific data
     if (viewName === 'dashboard') {
         loadDashboard();
@@ -156,6 +167,14 @@ function switchView(viewName) {
         loadStatesList();
     } else if (viewName === 'inventory') {
         loadInventoryTab();
+    } else if (viewName === 'settings') {
+        // initialize settings subviews
+        // load users list into the embedded Users table when admin
+        try {
+            if (window.initAdminUsers && currentUser && currentUser.role === 'admin') {
+                window.initAdminUsers();
+            }
+        } catch (e) { console.warn('initAdminUsers failed', e); }
     }
 }
 
@@ -460,6 +479,34 @@ function setupEventListeners() {
         });
     }
 
+    const damagedCardForm = document.getElementById('damagedCardForm');
+    if (damagedCardForm) {
+        damagedCardForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const quantity = Number(document.getElementById('damagedQty').value);
+            const reason = document.getElementById('damagedReason').value.trim();
+            const batch_reference = document.getElementById('damagedBatchRef').value.trim();
+            const notes = document.getElementById('damagedNotes').value.trim();
+            if (!quantity || quantity <= 0) return showAlert('Enter a valid damaged quantity', 'error');
+            if (!reason) return showAlert('Enter the damage reason', 'error');
+            try {
+                const res = await fetch(`${API_BASE}/personalization/damaged-cards`, {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ quantity, reason, batch_reference, notes })
+                });
+                const d = await res.json();
+                if (!res.ok) return showAlert(d.error || 'Failed to report damaged cards', 'error');
+                showAlert('Damaged cards reported', 'success');
+                document.getElementById('damagedQty').value = '';
+                document.getElementById('damagedReason').value = '';
+                document.getElementById('damagedBatchRef').value = '';
+                document.getElementById('damagedNotes').value = '';
+                await Promise.all([loadInventoryBalance(), loadLedger(), loadLowStock(), loadDamagedCardReports()]);
+            } catch (e) { showAlert('Error reporting damaged cards', 'error'); }
+        });
+    }
+
     // Create request
     const requestForm = document.getElementById('requestForm');
     if (requestForm) {
@@ -541,7 +588,7 @@ async function loadInitialData() {
 let currentUser = null;
 async function fetchCurrentUser() {
     try {
-        const res = await fetch(`${API_BASE}/auth/me`);
+           const res = await fetch(`${API_BASE}/auth/me`, { credentials: 'same-origin' });
         if (!res.ok) { currentUser = null; updateAuthUI(); return; }
         const data = await res.json();
         currentUser = data.user;
@@ -557,7 +604,7 @@ function updateAuthUI() {
 
     // Role-based tab visibility
     const allowedTabs = {
-        admin: ['dashboard','arns','delivery','states','reports','inventory'],
+        admin: ['dashboard','arns','delivery','states','reports','inventory','settings'],
         operator: ['dashboard','arns','delivery','reports'],
         officer: ['dashboard','delivery','inventory'],
         supervisor: ['dashboard','reports']
@@ -729,6 +776,7 @@ async function loadInventoryTab() {
             loadInventoryBalance(),
             loadLowStock(),
             loadLedger(),
+            loadDamagedCardReports(),
             loadRequests(),
             loadIssueNotes()
         ]);
@@ -805,6 +853,23 @@ async function loadLedger() {
         if (!rows || rows.length === 0) { container.innerHTML = '<p class="info-text">No movements</p>'; return; }
         container.innerHTML = `<table class="report-table"><thead><tr><th>When</th><th>Type</th><th>Qty</th><th>Ref</th><th>Operator</th><th>Notes</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${formatDate(r.created_at)}</td><td>${r.type}</td><td>${r.qty}</td><td>${r.reference||''}</td><td>${r.operator||''}</td><td>${r.notes||''}</td></tr>`).join('')}</tbody></table>`;
     } catch (e) { console.error('Error loading ledger', e); showAlert('Failed to load ledger', 'error'); }
+}
+
+async function loadDamagedCardReports() {
+    try {
+        const res = await fetch(`${API_BASE}/personalization/damaged-cards`);
+        const rows = await res.json();
+        const container = document.getElementById('damagedCardsList');
+        if (!container) return;
+        if (!rows || rows.length === 0) {
+            container.innerHTML = '<p class="info-text">No damaged card reports recorded.</p>';
+            return;
+        }
+        container.innerHTML = `<table class="report-table"><thead><tr><th>When</th><th>Qty</th><th>Reason</th><th>Batch Ref</th><th>Room</th><th>Reported By</th><th>Notes</th></tr></thead><tbody>${rows.map(r => `<tr><td>${formatDate(r.created_at)}</td><td>${r.quantity}</td><td>${escapeHtml(r.reason || '')}</td><td>${escapeHtml(r.batch_reference || '')}</td><td>${escapeHtml(r.room || '')}</td><td>${escapeHtml(r.reported_by || '')}</td><td>${escapeHtml(r.notes || '')}</td></tr>`).join('')}</tbody></table>`;
+    } catch (e) {
+        console.error('Error loading damaged card reports', e);
+        showAlert('Failed to load damaged card reports', 'error');
+    }
 }
 
 async function loadRequests() {

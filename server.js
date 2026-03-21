@@ -222,10 +222,11 @@ function initializeDatabase() {
       });
     });
 
-    // Users table for authentication and RBAC
+    // Users table for authentication and RBAC (include full_name)
     db.run(`CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
+      full_name TEXT,
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'operator',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -236,7 +237,7 @@ function initializeDatabase() {
       if (!err && row && row.cnt === 0) {
         const defaultPass = process.env.ADMIN_PW || 'admin123';
         const hash = bcrypt.hashSync(defaultPass, 10);
-        db.run(`INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)`, ['admin', hash, 'admin']);
+        db.run(`INSERT INTO users (username, full_name, password_hash, role) VALUES (?, ?, ?, ?)`, ['admin', 'Administrator', hash, 'admin']);
         console.log('Seeded default admin user (username: admin)');
       }
     });
@@ -246,8 +247,19 @@ function initializeDatabase() {
       if (!err3 && !urow) {
         const officerPass = process.env.OFFICER_PW || 'officer123';
         const hash2 = bcrypt.hashSync(officerPass, 10);
-        db.run(`INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)`, ['officer', hash2, 'officer']);
+        db.run(`INSERT INTO users (username, full_name, password_hash, role) VALUES (?, ?, ?, ?)`, ['officer', 'Store Officer', hash2, 'officer']);
         console.log('Seeded default store officer user (username: officer)');
+      }
+    });
+
+    // Migration: add full_name column to users if missing (for older DBs)
+    db.all(`PRAGMA table_info(users)`, [], (errU, colsU) => {
+      if (!errU && colsU) {
+        const colNamesU = colsU.map(c => c.name);
+        if (!colNamesU.includes('full_name')) {
+          console.log('Adding full_name column to users...');
+          db.run(`ALTER TABLE users ADD COLUMN full_name TEXT`, (aerr) => { if (aerr) console.warn('Could not add users.full_name column:', aerr.message); else console.log('Added users.full_name column'); });
+        }
       }
     });
 
@@ -261,6 +273,19 @@ function initializeDatabase() {
       operator TEXT,
       user_id INTEGER,
       notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS damaged_card_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      quantity INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      batch_reference TEXT,
+      notes TEXT,
+      room TEXT NOT NULL DEFAULT 'Personalization Room',
+      reported_by TEXT,
+      user_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
     )`);
@@ -547,18 +572,25 @@ function requireRole(roles) {
   };
 }
 
+// Helper: get a display name for the current session user (prefer full_name)
+function getDisplayName(req) {
+  if (!req || !req.session || !req.session.user) return null;
+  const u = req.session.user;
+  return u.full_name || u.displayName || u.username || null;
+}
+
 // Auth endpoints
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'username and password required' });
-  db.get(`SELECT id, username, password_hash, role FROM users WHERE username = ?`, [username], (err, user) => {
+  db.get(`SELECT id, username, full_name, password_hash, role FROM users WHERE username = ?`, [username], (err, user) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!user) return res.status(401).json({ error: 'Invalid credentials' });
     bcrypt.compare(password, user.password_hash, (err2, ok) => {
       if (err2) return res.status(500).json({ error: err2.message });
       if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
       // success
-      req.session.user = { id: user.id, username: user.username, role: user.role };
+      req.session.user = { id: user.id, username: user.username, full_name: user.full_name, role: user.role, displayName: user.full_name || user.username };
       res.json({ success: true, user: req.session.user });
     });
   });
@@ -580,6 +612,41 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 // end auth helpers
+
+// --- Admin user management (list / view / update full_name) ---
+// Requires admin role
+app.get('/api/admin/users', requireRole(['admin']), (req, res) => {
+  db.all(`SELECT id, username, COALESCE(full_name, '') as full_name, role, created_at FROM users ORDER BY id ASC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/api/admin/users/:id', requireRole(['admin']), (req, res) => {
+  const id = req.params.id;
+  db.get(`SELECT id, username, COALESCE(full_name, '') as full_name, role, created_at FROM users WHERE id = ?`, [id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: 'User not found' });
+    res.json(row);
+  });
+});
+
+app.put('/api/admin/users/:id', requireRole(['admin']), (req, res) => {
+  const id = req.params.id;
+  const { full_name } = req.body;
+  if (full_name === undefined) return res.status(400).json({ error: 'full_name required' });
+
+  db.run(`UPDATE users SET full_name = ? WHERE id = ?`, [full_name || null, id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    // return updated row
+    db.get(`SELECT id, username, COALESCE(full_name, '') as full_name, role, created_at FROM users WHERE id = ?`, [id], (err2, row) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      if (!row) return res.status(404).json({ error: 'User not found after update' });
+      res.json({ success: true, user: row });
+    });
+  });
+});
+
 
 // API Routes
 
@@ -725,7 +792,7 @@ app.post('/api/inventory/receive', requireRole(['officer','operator','admin']), 
   // If officer is receiving, add to their inventory; if admin, add to central
   const ownerUserId = userRole === 'officer' ? userId : null;
   
-  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['received', q, reference || '', req.session.user ? req.session.user.username : 'unknown', ownerUserId, notes || ''], function(err) {
+  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['received', q, reference || '', getDisplayName(req) || 'unknown', ownerUserId, notes || ''], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     logAudit(null, 'INVENTORY_RECEIVE', null, `+${q} (${reference || ''})`);
     res.json({ success: true, id: this.lastID });
@@ -810,11 +877,80 @@ app.post('/api/inventory/adjust', requireRole(['officer','admin','operator']), (
   const userRole = req.session.user ? req.session.user.role : null;
   const ownerUserId = userRole === 'officer' ? userId : null;
   // store negative qty for damaged/lost/issued types
-  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, [type, q, reference || '', req.session.user ? req.session.user.username : 'unknown', ownerUserId, notes || ''], function(err) {
+  db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, [type, q, reference || '', getDisplayName(req) || 'unknown', ownerUserId, notes || ''], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     logAudit(null, 'INVENTORY_ADJUST', null, `${type} ${q}`);
     res.json({ success: true, id: this.lastID });
   });
+});
+
+app.get('/api/personalization/damaged-cards', requireRole(['officer','admin','operator']), (req, res) => {
+  const userRole = req.session.user ? req.session.user.role : null;
+  const userId = req.session.user ? req.session.user.id : null;
+  let query = `SELECT * FROM damaged_card_reports`;
+  const params = [];
+
+  if (userRole === 'officer') {
+    query += ` WHERE user_id = ?`;
+    params.push(userId);
+  }
+
+  query += ` ORDER BY created_at DESC LIMIT 100`;
+
+  db.all(query, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.post('/api/personalization/damaged-cards', requireRole(['officer','admin','operator']), (req, res) => {
+  const quantity = Number(req.body.quantity);
+  const reason = (req.body.reason || '').trim();
+  const batchReference = (req.body.batch_reference || '').trim();
+  const notes = (req.body.notes || '').trim();
+  const room = 'Personalization Room';
+  const actor = getDisplayName(req) || 'unknown';
+  const userId = req.session.user ? req.session.user.id : null;
+  const userRole = req.session.user ? req.session.user.role : null;
+
+  if (!quantity || quantity <= 0) {
+    return res.status(400).json({ error: 'Quantity is required' });
+  }
+  if (!reason) {
+    return res.status(400).json({ error: 'Reason is required' });
+  }
+
+  const stockOwner = userRole === 'officer' ? userId : 'central';
+  getCurrentStock((err, total) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (total < quantity) {
+      return res.status(400).json({ error: `Insufficient stock to report damage. Available: ${total}` });
+    }
+
+    const movementUserId = userRole === 'officer' ? userId : null;
+    db.run(
+      `INSERT INTO damaged_card_reports (quantity, reason, batch_reference, notes, room, reported_by, user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [quantity, reason, batchReference || null, notes || null, room, actor, movementUserId],
+      function(reportErr) {
+        if (reportErr) return res.status(500).json({ error: reportErr.message });
+
+        const reportId = this.lastID;
+        const ledgerReference = batchReference || `damage_report_${reportId}`;
+        const ledgerNotes = `Damaged card report in ${room}${notes ? ` | ${notes}` : ''}`;
+
+        db.run(
+          `INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`,
+          ['damaged', -quantity, ledgerReference, actor, movementUserId, ledgerNotes],
+          function(movementErr) {
+            if (movementErr) return res.status(500).json({ error: movementErr.message });
+            logAudit(null, 'DAMAGED_CARD_REPORTED', null, `qty=${quantity}, room=${room}, reason=${reason}`);
+            res.json({ success: true, id: reportId });
+          }
+        );
+      }
+    );
+  }, stockOwner);
 });
 
 // Low-stock status
@@ -843,7 +979,7 @@ app.get('/api/inventory/requests', requireLogin, (req, res) => {
   const userRole = req.session.user ? req.session.user.role : null;
   const userId = req.session.user ? req.session.user.id : null;
   
-    let query = `SELECT r.*, u.username as requester, a.username as approver, r.requester_name, r.requester_signed_at, r.approver_name, r.approver_signed_at, i.id as issue_id, i.issuer_name, i.issuer_signed_at, i.receiver_name, i.receiver_signed_at, i.status as issue_status FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id LEFT JOIN users a ON r.approver_id = a.id LEFT JOIN issue_notes i ON i.request_id = r.id`;
+    let query = `SELECT r.*, COALESCE(u.full_name, u.username) as requester, COALESCE(a.full_name, a.username) as approver, r.requester_name, r.requester_signed_at, r.approver_name, r.approver_signed_at, i.id as issue_id, i.issuer_name, i.issuer_signed_at, i.receiver_name, i.receiver_signed_at, i.status as issue_status FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id LEFT JOIN users a ON r.approver_id = a.id LEFT JOIN issue_notes i ON i.request_id = r.id`;
   let params = [];
   
   // Officer can only see their own requests
@@ -901,7 +1037,7 @@ app.post('/api/inventory/requests/:id/decide', requireRole(['operator','admin'])
     }
     
     function proceedWithApproval() {
-      db.run(`UPDATE blank_card_requests SET status = ?, approved_qty = ?, approver_id = ?, decision_note = ?, approver_name = ?, approver_signed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [status, approved, approver_id, decision_note || '', req.session.user ? req.session.user.username : null, id], function(err2) {
+      db.run(`UPDATE blank_card_requests SET status = ?, approved_qty = ?, approver_id = ?, decision_note = ?, approver_name = ?, approver_signed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [status, approved, approver_id, decision_note || '', getDisplayName(req) || null, id], function(err2) {
         if (err2) return res.status(500).json({ error: err2.message });
         logAudit(null, 'REQUEST_DECIDED', reqRow.status, `${status} qty ${approved}`);
         
@@ -949,7 +1085,7 @@ app.get('/api/inventory/requests/:id/form', requireLogin, (req, res) => {
   const userId = req.session.user ? req.session.user.id : null;
   const userRole = req.session.user ? req.session.user.role : null;
   
-  db.get(`SELECT r.*, u.username as requester_name FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id WHERE r.id = ?`, [id], (err, req_row) => {
+  db.get(`SELECT r.*, COALESCE(u.full_name, u.username) as requester_name FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id WHERE r.id = ?`, [id], (err, req_row) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!req_row) return res.status(404).json({ error: 'Request not found' });
     
@@ -1038,7 +1174,7 @@ app.get('/api/inventory/requests/:id/download-form', requireLogin, (req, res) =>
   const userRole = req.session.user ? req.session.user.role : null;
   
   db.get(
-    `SELECT r.*, u.username as requester_name, a.username as approver_name 
+    `SELECT r.*, COALESCE(u.full_name, u.username) as requester_name, COALESCE(a.full_name, a.username) as approver_name 
      FROM blank_card_requests r 
      LEFT JOIN users u ON r.requester_id = u.id 
      LEFT JOIN users a ON r.approver_id = a.id 
@@ -1070,11 +1206,14 @@ app.get('/api/inventory/requests/:id/download-form', requireLogin, (req, res) =>
       
       doc.pipe(res);
       
+      // Top title: ECOWAS heading followed by form title
+      doc.fontSize(20).font('Helvetica-Bold').text('ECOWAS NATIONAL BIOMETRIC IDENTITY CARD', { align: 'center' });
+      doc.moveDown(0.3);
       // Header
-      doc.fontSize(18).font('Helvetica-Bold').text('BLANK CARD REQUEST FORM', { align: 'center' });
+      doc.fontSize(16).font('Helvetica-Bold').text('BLANK CARD REQUEST FORM', { align: 'center' });
       doc.moveDown(0.5);
-      doc.fontSize(10).font('Helvetica').text(`Request ID: ${id}`, { align: 'center' });
-      doc.fontSize(10).text(`Generated: ${moment().format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
+      doc.fontSize(9).font('Helvetica').text(`Request ID: ${id}`, { align: 'center' });
+      doc.fontSize(9).text(`Generated: ${moment().format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
       doc.moveDown();
       
       // Request Details Section
@@ -1209,8 +1348,9 @@ app.post('/api/inventory/requests/:id/generate-issue', requireRole(['operator','
 // Sign issue note (issuer or receiver) and optionally upload note file
 app.post('/api/inventory/issue/:issueId/sign', requireLogin, (req, res) => {
   const issueId = req.params.issueId;
-  const { signer, name, fileData } = req.body; // signer: 'issuer' or 'receiver'
-  if (!signer || !name) return res.status(400).json({ error: 'signer and name required' });
+  const { signer, fileData } = req.body; // signer: 'issuer' or 'receiver'
+  if (!signer) return res.status(400).json({ error: 'signer required' });
+  const sessionName = getDisplayName(req);
 
   db.get(`SELECT * FROM issue_notes WHERE id = ?`, [issueId], (err, issue) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -1221,11 +1361,11 @@ app.post('/api/inventory/issue/:issueId/sign', requireLogin, (req, res) => {
     if (signer === 'issuer') {
       // only operator/admin can be issuer
       if (!(req.session.user && (req.session.user.role === 'operator' || req.session.user.role === 'admin'))) return res.status(403).json({ error: 'Forbidden' });
-      updates.push('issuer_name = ?', 'issuer_signed_at = CURRENT_TIMESTAMP'); params.push(name);
+      updates.push('issuer_name = ?', 'issuer_signed_at = CURRENT_TIMESTAMP'); params.push(sessionName || '');
     } else if (signer === 'receiver') {
       // receiver should be store officer
       if (!(req.session.user && (req.session.user.role === 'officer' || req.session.user.role === 'admin'))) return res.status(403).json({ error: 'Forbidden' });
-      updates.push('receiver_name = ?', 'receiver_signed_at = CURRENT_TIMESTAMP'); params.push(name);
+      updates.push('receiver_name = ?', 'receiver_signed_at = CURRENT_TIMESTAMP'); params.push(sessionName || '');
     } else {
       return res.status(400).json({ error: 'Invalid signer' });
     }
@@ -1246,7 +1386,7 @@ app.post('/api/inventory/issue/:issueId/sign', requireLogin, (req, res) => {
           // mark completed and add qty to stock_movements (store receives the approved qty)
           db.run(`UPDATE issue_notes SET status = 'completed' WHERE id = ?`, [issueId]);
           const issueUserId = uissue.requester_id || null;
-          db.run(`INSERT INTO stock_movements (type, qty, reference, related_request_id, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?)`, ['received_from_issue', uissue.quantity, `issue_${issueId}`, uissue.request_id, req.session.user ? req.session.user.username : 'system', issueUserId, 'Received via issue note'], function(err4) {
+          db.run(`INSERT INTO stock_movements (type, qty, reference, related_request_id, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?)`, ['received_from_issue', uissue.quantity, `issue_${issueId}`, uissue.request_id, getDisplayName(req) || 'system', issueUserId, 'Received via issue note'], function(err4) {
             if (err4) console.error('Error adding stock from issue:', err4);
             // update request status if needed
             db.run(`UPDATE blank_card_requests SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [uissue.request_id]);
@@ -1262,8 +1402,9 @@ app.post('/api/inventory/issue/:issueId/sign', requireLogin, (req, res) => {
 // Sign a blank card request (requester or approver)
 app.post('/api/inventory/requests/:id/sign', requireLogin, (req, res) => {
   const id = req.params.id;
-  const { signer, name } = req.body; // signer: 'requester' or 'approver'
-  if (!signer || !name) return res.status(400).json({ error: 'signer and name required' });
+  const { signer } = req.body; // signer: 'requester' or 'approver'
+  if (!signer) return res.status(400).json({ error: 'signer required' });
+  const sessionName = getDisplayName(req);
 
   db.get(`SELECT * FROM blank_card_requests WHERE id = ?`, [id], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -1275,14 +1416,14 @@ app.post('/api/inventory/requests/:id/sign', requireLogin, (req, res) => {
       if (req.session.user && req.session.user.role !== 'admin' && req.session.user.role !== 'officer' && req.session.user.id !== row.requester_id) {
         return res.status(403).json({ error: 'Forbidden' });
       }
-      db.run(`UPDATE blank_card_requests SET requester_name = ?, requester_signed_at = CURRENT_TIMESTAMP WHERE id = ?`, [name, id], function(err2) {
+      db.run(`UPDATE blank_card_requests SET requester_name = ?, requester_signed_at = CURRENT_TIMESTAMP WHERE id = ?`, [sessionName || '', id], function(err2) {
         if (err2) return res.status(500).json({ error: err2.message });
         res.json({ success: true });
       });
     } else if (signer === 'approver') {
       // only operator/admin can sign as approver
       if (!(req.session.user && (req.session.user.role === 'operator' || req.session.user.role === 'admin'))) return res.status(403).json({ error: 'Forbidden' });
-      db.run(`UPDATE blank_card_requests SET approver_name = ?, approver_signed_at = CURRENT_TIMESTAMP WHERE id = ?`, [name, id], function(err2) {
+      db.run(`UPDATE blank_card_requests SET approver_name = ?, approver_signed_at = CURRENT_TIMESTAMP WHERE id = ?`, [sessionName || '', id], function(err2) {
         if (err2) return res.status(500).json({ error: err2.message });
         res.json({ success: true });
       });
@@ -1312,7 +1453,7 @@ app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin']), (req
     const deductUserId = userRole === 'officer' ? userId : null;
     
     // record movement as negative qty
-    db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['issued', -q, reference || issued_to || '', req.session.user ? req.session.user.username : 'unknown', deductUserId, notes || 'Issued to personalization'], function(err2) {
+    db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['issued', -q, reference || issued_to || '', getDisplayName(req) || 'unknown', deductUserId, notes || 'Issued to personalization'], function(err2) {
       if (err2) return res.status(500).json({ error: err2.message });
       logAudit(null, 'INVENTORY_ISSUED', null, `-${q} to ${issued_to || reference || ''}`);
       res.json({ success: true, id: this.lastID });
@@ -1324,7 +1465,7 @@ app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin']), (req
 app.get('/forms/print-request', requireLogin, (req, res) => {
   const id = req.query.id;
   if (!id) return res.status(400).send('Missing id');
-  db.get(`SELECT r.*, u.username as requester, a.username as approver FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id LEFT JOIN users a ON r.approver_id = a.id WHERE r.id = ?`, [id], (err, row) => {
+  db.get(`SELECT r.*, COALESCE(u.full_name, u.username) as requester, COALESCE(a.full_name, a.username) as approver FROM blank_card_requests r LEFT JOIN users u ON r.requester_id = u.id LEFT JOIN users a ON r.approver_id = a.id WHERE r.id = ?`, [id], (err, row) => {
     if (err) return res.status(500).send('DB error');
     if (!row) return res.status(404).send('Request not found');
 
@@ -1339,8 +1480,8 @@ app.get('/forms/print-request', requireLogin, (req, res) => {
     </head>
     <body>
       <div class="form-header">
-        <h1>ENBIC Card Request Form</h1>
-        <div class="form-sub">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</div>
+        <h1 style="text-align:center;font-weight:bold">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</h1>
+        <h2>ENBIC Card Request Form</h2>
       </div>
       <div class="form-body">
         <div style="display:flex;justify-content:space-between;">
@@ -1377,7 +1518,7 @@ app.get('/forms/print-request', requireLogin, (req, res) => {
 app.get('/forms/print-issue', requireLogin, (req, res) => {
   const id = req.query.id;
   if (!id) return res.status(400).send('Missing id');
-  db.get(`SELECT i.*, r.requester_id, u.username as requester, r.quantity as requested_qty FROM issue_notes i LEFT JOIN blank_card_requests r ON i.request_id = r.id LEFT JOIN users u ON r.requester_id = u.id WHERE i.id = ?`, [id], (err, row) => {
+  db.get(`SELECT i.*, r.requester_id, COALESCE(u.full_name, u.username) as requester, r.quantity as requested_qty FROM issue_notes i LEFT JOIN blank_card_requests r ON i.request_id = r.id LEFT JOIN users u ON r.requester_id = u.id WHERE i.id = ?`, [id], (err, row) => {
     if (err) return res.status(500).send('DB error');
     if (!row) return res.status(404).send('Issue note not found');
 
@@ -1392,8 +1533,8 @@ app.get('/forms/print-issue', requireLogin, (req, res) => {
     </head>
     <body>
       <div class="form-header">
-        <h1>CARD ISSUANCE & ACKNOWLEDGEMENT FORM</h1>
-        <div class="form-sub">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</div>
+        <h1 style="text-align:center;font-weight:bold">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</h1>
+        <h2>CARD ISSUANCE & ACKNOWLEDGEMENT FORM</h2>
       </div>
       <div class="form-body">
         <div style="display:flex;justify-content:space-between;">
@@ -1465,7 +1606,7 @@ app.get('/api/inventory/reconciliation', requireRole(['officer','operator','admi
 
 // List issue notes
 app.get('/api/inventory/issue-notes', requireRole(['officer','operator','admin']), (req, res) => {
-  db.all(`SELECT i.*, u1.username as requester, u2.username as approver FROM issue_notes i LEFT JOIN users u1 ON i.issuer_name = u1.username LEFT JOIN users u2 ON i.receiver_name = u2.username ORDER BY i.created_at DESC`, [], (err, rows) => {
+  db.all(`SELECT i.*, COALESCE(u1.full_name, u1.username) as requester, COALESCE(u2.full_name, u2.username) as approver FROM issue_notes i LEFT JOIN users u1 ON i.issuer_name = u1.username LEFT JOIN users u2 ON i.receiver_name = u2.username ORDER BY i.created_at DESC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -1593,7 +1734,7 @@ app.put('/api/arns/:arn/document-number', requireRole(['officer','admin']), (req
       return res.status(400).json({ error: `Cannot set document number at status ${row.status}` });
     }
 
-    const actor = req.session && req.session.user ? req.session.user.username : null;
+    const actor = getDisplayName(req);
     // Ensure uniqueness: document_number must not already be assigned to a different ARN
     db.get(`SELECT arn FROM arns WHERE document_number = ? AND arn != ?`, [document_number, arn], (err3, existing) => {
       if (err3) return res.status(500).json({ error: err3.message });
@@ -1737,7 +1878,10 @@ app.post('/api/dispatch/pickup', requireRole(['officer','admin']), (req, res) =>
       const rowsHtml = arns.map(a => `<tr><td>${a}</td></tr>`).join('');
       const html = `<!doctype html><html><head><meta charset="utf-8"><title>Pickup Note - ${batchId}</title>
         <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}table{border-collapse:collapse;width:100%}td,th{padding:8px;border:1px solid #ddd}</style>
-        </head><body><h1>Pickup Note</h1><div><strong>Batch:</strong> ${batchId}</div><div><strong>Collector:</strong> ${collector_name || ''} ${collector_phone ? ' — ' + collector_phone : ''}</div>
+        </head><body>
+        <h1 style="text-align:center;font-weight:bold">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</h1>
+        <h2 style="margin-top:8px;color:#1f3a57">Pickup Note</h2>
+        <div><strong>Batch:</strong> ${batchId}</div><div><strong>Collector:</strong> ${collector_name || ''} ${collector_phone ? ' — ' + collector_phone : ''}</div>
         <table><thead><tr><th>ARN</th></tr></thead><tbody>${rowsHtml}</tbody></table>
         <div style="margin-top:12px;color:#666;">Signatures required: Operator and Store Officer</div></body></html>`;
 
@@ -1766,8 +1910,9 @@ app.get('/api/dispatch/batches', requireRole(['operator','admin','officer']), (r
 // Sign a batch (operator or officer) and optionally upload signed delivery note (data URL)
 app.post('/api/dispatch/:batchId/sign', requireLogin, (req, res) => {
   const batchId = req.params.batchId;
-  const { signer, name, fileData } = req.body; // signer: 'operator' or 'officer'
-  if (!signer || !name) return res.status(400).json({ error: 'signer and name required' });
+  const { signer, fileData } = req.body; // signer: 'operator' or 'officer'
+  if (!signer) return res.status(400).json({ error: 'signer required' });
+  const sessionName = getDisplayName(req);
 
   // role enforcement: operator-sign must be operator/admin; officer-sign must be officer/admin
   const sessionRole = req.session && req.session.user && req.session.user.role;
@@ -1787,10 +1932,10 @@ app.post('/api/dispatch/:batchId/sign', requireLogin, (req, res) => {
 
     if (signer === 'operator') {
       updates.push('operator_name = ?', 'operator_signed_at = CURRENT_TIMESTAMP');
-      params.push(name);
+      params.push(sessionName || '');
     } else if (signer === 'officer') {
       updates.push('officer_name = ?', 'officer_signed_at = CURRENT_TIMESTAMP');
-      params.push(name);
+      params.push(sessionName || '');
     } else {
       return res.status(400).json({ error: 'Invalid signer' });
     }
@@ -1847,7 +1992,8 @@ app.post('/api/dispatch/:batchId/sign', requireLogin, (req, res) => {
               const html = `<!doctype html><html><head><meta charset="utf-8"><title>Pickup Confirmation - ${updated.batch_id}</title>
                 <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
                 </head><body>
-                <h1><strong>Picked at SHQ</strong></h1>
+                <h1 style="text-align:center;font-weight:bold">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</h1>
+                <h2 style="margin-top:8px;color:#1f3a57"><strong>Picked at SHQ</strong></h2>
                 <div><strong>Batch ID:</strong> ${esc(updated.batch_id)}</div>
                 <div><strong>Created:</strong> ${esc(updated.created_at || '')}</div>
                 <div style="margin-top:8px"><strong>Collector:</strong> ${collectorText}</div>
@@ -2012,7 +2158,8 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
           const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
             <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
             </head><body>
-            <h1>${title}</h1>
+            <h1 style="text-align:center;font-weight:bold">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</h1>
+            <h2 style="margin-top:8px;color:#1f3a57">${title}</h2>
             <div><strong>Batch ID:</strong> ${batch.batch_id}</div>
             <div><strong>Created:</strong> ${batch.created_at}</div>
             <div style="margin-top:8px">${signInfo}</div>
@@ -2090,7 +2237,8 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
       const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
         <style>body{font-family:Arial,Helvetica,sans-serif;padding:20px}h1{color:#1f3a57}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{padding:8px;border:1px solid #ddd;text-align:left}thead th{background:#f6fbff}</style>
         </head><body>
-        <h1>${title}</h1>
+        <h1 style="text-align:center;font-weight:bold">ECOWAS NATIONAL BIOMETRIC IDENTITY CARD</h1>
+        <h2 style="margin-top:8px;color:#1f3a57">${title}</h2>
         <div><strong>ARN:</strong> ${arnParam}</div>
         ${nameLine}
         ${docLine}
