@@ -52,50 +52,23 @@ const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READWRITE | sqlite3.OPEN_C
     console.error('Error opening database:', err);
   } else {
     console.log('Connected to SQLite database');
-    initializeDatabase();
-    // Generate reminders immediately on startup and schedule daily generation
-    generateRemindersInDB((err) => {
-      if (err) console.error('Error generating reminders on startup:', err);
-      else console.log('Initial reminders generated');
+    // Initialize DB schema and run post-init tasks (like generating reminders)
+    initializeDatabase(() => {
+      // Generate reminders immediately on startup and schedule daily generation
+      generateRemindersInDB((err) => {
+        if (err) console.error('Error generating reminders on startup:', err);
+        else console.log('Initial reminders generated');
+      });
+      setInterval(() => generateRemindersInDB(), 24 * 60 * 60 * 1000);
     });
-    setInterval(() => generateRemindersInDB(), 24 * 60 * 60 * 1000);
   }
 });
 
-// ensure dispatch_batches table has optional batch_arn column for single-ARN batches
-db.serialize(() => {
-  db.all(`PRAGMA table_info(dispatch_batches)`, [], (err, cols) => {
-    if (!err && cols) {
-      const names = cols.map(c => c.name);
-      if (!names.includes('batch_arn')) {
-        console.log('Adding batch_arn column to dispatch_batches...');
-        db.run(`ALTER TABLE dispatch_batches ADD COLUMN batch_arn TEXT`, (alterErr) => {
-          if (alterErr) console.warn('Could not add batch_arn column:', alterErr.message);
-        });
-      }
-    }
-  });
-
-  // Add signature columns to blank_card_requests if they don't exist
-  db.all(`PRAGMA table_info(blank_card_requests)`, [], (err, cols) => {
-    if (!err && cols) {
-      const names = cols.map(c => c.name);
-      if (!names.includes('officer_signature')) {
-        console.log('Adding signature columns to blank_card_requests...');
-        db.run(`ALTER TABLE blank_card_requests ADD COLUMN officer_signature TEXT`, (alterErr) => {
-          if (alterErr) console.warn('Could not add officer_signature column:', alterErr.message);
-        });
-        db.run(`ALTER TABLE blank_card_requests ADD COLUMN officer_signed_at DATETIME`);
-        db.run(`ALTER TABLE blank_card_requests ADD COLUMN admin_signature TEXT`);
-        db.run(`ALTER TABLE blank_card_requests ADD COLUMN admin_signed_at DATETIME`);
-        db.run(`ALTER TABLE blank_card_requests ADD COLUMN form_data TEXT`);
-      }
-    }
-  });
-});
+// NOTE: per-schema migrations are handled inside initializeDatabase()
+// to ensure all CREATE TABLE statements run before any PRAGMA/ALTER operations.
 
 // Initialize database schema
-function initializeDatabase() {
+function initializeDatabase(cb) {
   db.serialize(() => {
     // States table
     db.run(`CREATE TABLE IF NOT EXISTS states (
@@ -370,6 +343,7 @@ function initializeDatabase() {
     });
 
     console.log('Database initialized');
+    if (typeof cb === 'function') cb(null);
   });
 }
 
@@ -722,7 +696,7 @@ app.get('/api/arns', (req, res) => {
 });
 
 // Receive personalized ARNs into store (batch)
-app.post('/api/arns/receive', requireRole(['officer','admin','operator']), (req, res) => {
+app.post('/api/arns/receive', requireRole(['officer','admin','operator','personalization']), (req, res) => {
   const { arns, state } = req.body;
   if (!Array.isArray(arns) || arns.length === 0) return res.status(400).json({ error: 'arns array required' });
 
@@ -752,7 +726,7 @@ app.post('/api/arns/receive', requireRole(['officer','admin','operator']), (req,
 });
 
 // Record SHQ pickup for one or many ARNs
-app.post('/api/arns/pickup', requireRole(['officer','admin','operator']), (req, res) => {
+app.post('/api/arns/pickup', requireRole(['officer','admin','operator','personalization']), (req, res) => {
   const { arns, collector_name, collector_id, phone } = req.body;
   if (!Array.isArray(arns) || arns.length === 0) return res.status(400).json({ error: 'arns array required' });
   if (!collector_name && !collector_id && !phone) return res.status(400).json({ error: 'collector info required' });
@@ -782,15 +756,27 @@ app.post('/api/arns/pickup', requireRole(['officer','admin','operator']), (req, 
 
 // Inventory endpoints
 // Receive blank cards into store (Store Officer)
-app.post('/api/inventory/receive', requireRole(['officer','operator','admin']), (req, res) => {
-  const { qty, reference, notes } = req.body;
+app.post('/api/inventory/receive', requireRole(['officer','operator','admin','personalization']), (req, res) => {
+  const { qty, reference, notes, owner, user_id } = req.body;
   if (!qty || Number(qty) <= 0) return res.status(400).json({ error: 'Quantity required and must be > 0' });
   const q = Number(qty);
   const userId = req.session.user ? req.session.user.id : null;
   const userRole = req.session.user ? req.session.user.role : null;
-  
-  // If officer is receiving, add to their inventory; if admin, add to central
+  // Defensive checks: officers must not restock central inventory
+  if ((owner === 'central' || owner === 'central_inventory') && userRole === 'officer') {
+    return res.status(403).json({ error: 'Forbidden: officers cannot restock central inventory' });
+  }
+
+  // If client supplied a user_id, only allow admins to set arbitrary user_id
+  if (user_id && userRole !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden: only admin may set target user for stock movements' });
+  }
+
+  // If officer is receiving, add to their inventory; if admin/operator, add to central
   const ownerUserId = userRole === 'officer' ? userId : null;
+  if (ownerUserId === null && !(userRole === 'admin' || userRole === 'operator')) {
+    return res.status(403).json({ error: 'Forbidden: insufficient role to restock central inventory' });
+  }
   
   db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['received', q, reference || '', getDisplayName(req) || 'unknown', ownerUserId, notes || ''], function(err) {
     if (err) return res.status(500).json({ error: err.message });
@@ -800,7 +786,7 @@ app.post('/api/inventory/receive', requireRole(['officer','operator','admin']), 
 });
 
 // Get current balance
-app.get('/api/inventory/balance', requireRole(['officer','admin']), (req, res) => {
+app.get('/api/inventory/balance', requireRole(['officer','admin','personalization']), (req, res) => {
   const userId = req.session.user ? req.session.user.id : null;
   const userRole = req.session.user ? req.session.user.role : null;
   
@@ -839,7 +825,7 @@ app.get('/api/inventory/balance', requireRole(['officer','admin']), (req, res) =
 });
 
 // Get ledger (movements)
-app.get('/api/inventory/ledger', requireRole(['officer','admin']), (req, res) => {
+app.get('/api/inventory/ledger', requireRole(['officer','admin','personalization']), (req, res) => {
   const { page = 1, page_size = 100 } = req.query;
   const limit = Math.min(Number(page_size) || 100, 1000);
   const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
@@ -850,8 +836,8 @@ app.get('/api/inventory/ledger', requireRole(['officer','admin']), (req, res) =>
   let query = `SELECT * FROM stock_movements`;
   let params = [];
   
-  // Officers only see their own movements (where user_id = their id)
-  if (userRole === 'officer') {
+  // Officers and personalization users see only their own movements
+  if (userRole === 'officer' || userRole === 'personalization') {
     query += ` WHERE user_id = ?`;
     params.push(userId);
   }
@@ -867,7 +853,7 @@ app.get('/api/inventory/ledger', requireRole(['officer','admin']), (req, res) =>
 });
 
 // Adjustments / damaged / lost
-app.post('/api/inventory/adjust', requireRole(['officer','admin','operator']), (req, res) => {
+app.post('/api/inventory/adjust', requireRole(['officer','admin','operator','personalization']), (req, res) => {
   const { qty, type, reference, notes } = req.body; // qty positive or negative depending on adjustment
   if (!qty || Number(qty) === 0) return res.status(400).json({ error: 'Quantity required and cannot be zero' });
   const q = Number(qty);
@@ -884,7 +870,7 @@ app.post('/api/inventory/adjust', requireRole(['officer','admin','operator']), (
   });
 });
 
-app.get('/api/personalization/damaged-cards', requireRole(['officer','admin','operator']), (req, res) => {
+app.get('/api/personalization/damaged-cards', requireRole(['officer','admin','operator','personalization']), (req, res) => {
   const userRole = req.session.user ? req.session.user.role : null;
   const userId = req.session.user ? req.session.user.id : null;
   let query = `SELECT * FROM damaged_card_reports`;
@@ -903,7 +889,7 @@ app.get('/api/personalization/damaged-cards', requireRole(['officer','admin','op
   });
 });
 
-app.post('/api/personalization/damaged-cards', requireRole(['officer','admin','operator']), (req, res) => {
+app.post('/api/personalization/damaged-cards', requireRole(['officer','admin','operator','personalization']), (req, res) => {
   const quantity = Number(req.body.quantity);
   const reason = (req.body.reason || '').trim();
   const batchReference = (req.body.batch_reference || '').trim();
@@ -1434,7 +1420,7 @@ app.post('/api/inventory/requests/:id/sign', requireLogin, (req, res) => {
 });
 
 // Issue blank cards to personalization (Store -> Perso). Reduces stock immediately.
-app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin']), (req, res) => {
+app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin','personalization']), (req, res) => {
   const { qty, issued_to, reference, notes } = req.body;
   if (!qty || Number(qty) <= 0) return res.status(400).json({ error: 'Quantity required' });
   const q = Number(qty);
@@ -1449,14 +1435,33 @@ app.post('/api/inventory/issue-to-perso', requireRole(['officer','admin']), (req
     if (err) return res.status(500).json({ error: err.message });
     if (total < q) return res.status(400).json({ error: 'Insufficient stock' });
     
-    // Determine which user_id to deduct from
+    // Determine which user_id to deduct from (officer -> their id, admin -> central)
     const deductUserId = userRole === 'officer' ? userId : null;
-    
-    // record movement as negative qty
+
+    // record movement as negative qty for the issuer
     db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['issued', -q, reference || issued_to || '', getDisplayName(req) || 'unknown', deductUserId, notes || 'Issued to personalization'], function(err2) {
       if (err2) return res.status(500).json({ error: err2.message });
-      logAudit(null, 'INVENTORY_ISSUED', null, `-${q} to ${issued_to || reference || ''}`);
-      res.json({ success: true, id: this.lastID });
+      const issuedId = this.lastID;
+      // Try to credit the personalization user if `issued_to` matches a username
+      if (issued_to && typeof issued_to === 'string') {
+        db.get(`SELECT id FROM users WHERE username = ?`, [issued_to], (uerr, urow) => {
+          if (!uerr && urow) {
+            const persoUserId = urow.id;
+            db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['received_for_personalization', q, reference || `from_issue_${issuedId}` || '', getDisplayName(req) || 'system', persoUserId, `Received for personalization (from ${getDisplayName(req)||'system'})`], function(err3) {
+              if (err3) console.error('Failed to credit personalization user:', err3.message);
+              logAudit(null, 'INVENTORY_ISSUED', null, `-${q} to ${issued_to || reference || ''}`);
+              return res.json({ success: true, id: issuedId });
+            });
+          } else {
+            // No matching personalization user; just return success for the issued deduction
+            logAudit(null, 'INVENTORY_ISSUED', null, `-${q} to ${issued_to || reference || ''}`);
+            return res.json({ success: true, id: issuedId, warning: 'issued_to username not found' });
+          }
+        });
+      } else {
+        logAudit(null, 'INVENTORY_ISSUED', null, `-${q} to ${issued_to || reference || ''}`);
+        return res.json({ success: true, id: issuedId });
+      }
     });
   }, checkUserId);
 });
@@ -1663,7 +1668,7 @@ app.post('/api/arns', requireRole(['operator','admin']), (req, res) => {
 });
 
 // Update ARN status
-app.put('/api/arns/:arn/status', requireRole(['operator','admin','supervisor']), (req, res) => {
+app.put('/api/arns/:arn/status', requireRole(['operator','admin','supervisor','personalization']), (req, res) => {
   const { status } = req.body;
   const { arn } = req.params;
 
@@ -1679,10 +1684,18 @@ app.put('/api/arns/:arn/status', requireRole(['operator','admin','supervisor']),
       return res.status(404).json({ error: 'ARN not found' });
     }
 
-    if (!isValidStatusTransition(row.status, status)) {
-      return res.status(400).json({ 
-        error: `Invalid status transition from ${row.status} to ${status}` 
-      });
+    // If personalization role is making the change, only allow Submitted -> Pending Delivery
+    const actorRole = req.session.user ? req.session.user.role : null;
+    if (actorRole === 'personalization') {
+      if (!(row.status === 'Submitted to Personalization' && status === 'Pending Delivery')) {
+        return res.status(403).json({ error: 'Personalization role may only mark Submitted to Personalization -> Pending Delivery' });
+      }
+    } else {
+      if (!isValidStatusTransition(row.status, status)) {
+        return res.status(400).json({ 
+          error: `Invalid status transition from ${row.status} to ${status}` 
+        });
+      }
     }
 
     const updateFields = ['status = ?'];
@@ -1706,6 +1719,18 @@ app.put('/api/arns/:arn/status', requireRole(['operator','admin','supervisor']),
         } else {
           logAudit(arn, 'STATUS_UPDATED', row.status, status);
           res.json({ success: true });
+          // If personalization user marked Pending Delivery, consume one personalization stock
+          try {
+            if (actorRole === 'personalization' && status === 'Pending Delivery') {
+              const persoUserId = req.session.user ? req.session.user.id : null;
+              if (persoUserId) {
+                db.run(`INSERT INTO stock_movements (type, qty, reference, operator, user_id, notes) VALUES (?, ?, ?, ?, ?, ?)`, ['personalization_complete', -1, arn, getDisplayName(req) || 'personalization', persoUserId, `Consumed for ARN ${arn}`], function(err4) {
+                  if (err4) console.error('Failed to record personalization consumption:', err4.message);
+                  else logAudit(arn, 'PERSONALIZATION_CONSUMED', null, `-1 by user ${persoUserId}`);
+                });
+              }
+            }
+          } catch (e) { console.error('Error recording personalization consumption', e); }
           // Refresh reminders after status change (non-blocking)
           try {
             generateRemindersInDB();
@@ -1719,7 +1744,7 @@ app.put('/api/arns/:arn/status', requireRole(['operator','admin','supervisor']),
 });
 
 // Append or update document number for an ARN (store officer or admin)
-app.put('/api/arns/:arn/document-number', requireRole(['officer','admin']), (req, res) => {
+app.put('/api/arns/:arn/document-number', requireRole(['officer','admin','personalization']), (req, res) => {
   const { document_number } = req.body;
   const { arn } = req.params;
 

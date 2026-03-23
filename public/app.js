@@ -607,7 +607,8 @@ function updateAuthUI() {
         admin: ['dashboard','arns','delivery','states','reports','inventory','settings'],
         operator: ['dashboard','arns','delivery','reports'],
         officer: ['dashboard','delivery','inventory'],
-        supervisor: ['dashboard','reports']
+        supervisor: ['dashboard','reports'],
+        personalization: ['dashboard','delivery','inventory']
     };
 
     const sidebarItems = Array.from(document.querySelectorAll('.sidebar-item'));
@@ -634,10 +635,15 @@ function updateAuthUI() {
             if (first && first.dataset && first.dataset.view) switchView(first.dataset.view);
         }
         
-        // Show admin restock section only for admins
+        // Show admin restock section only for admins/operators
         const adminRestockSection = document.getElementById('adminRestockSection');
         if (adminRestockSection) {
             adminRestockSection.style.display = (currentUser.role === 'admin' || currentUser.role === 'operator') ? 'block' : 'none';
+        }
+        // Hide the submenu button for admin restock for officers
+        const adminRestockBtn = document.querySelector('.submenu-item[data-section="admin-restock"]');
+        if (adminRestockBtn) {
+            adminRestockBtn.style.display = (currentUser.role === 'admin' || currentUser.role === 'operator') ? '' : 'none';
         }
     } else {
         // stop polling and any active reminder UI when logged out
@@ -661,6 +667,8 @@ function updateAuthUI() {
         if (adminRestockSection) {
             adminRestockSection.style.display = 'none';
         }
+        const adminRestockBtn = document.querySelector('.submenu-item[data-section="admin-restock"]');
+        if (adminRestockBtn) adminRestockBtn.style.display = 'none';
     }
 }
 
