@@ -571,6 +571,46 @@ function setupEventListeners() {
     }
 }
 
+// Ensure custom report controls work even if viewReport() wasn't called first
+document.addEventListener('DOMContentLoaded', () => {
+    const applyBtn = document.getElementById('applyReportFilters');
+    const clearBtn = document.getElementById('clearReportFilters');
+    const exExcel = document.getElementById('exportReportExcel');
+    const exPdf = document.getElementById('exportReportPdf');
+    const searchInput = document.getElementById('reportSearch');
+
+    if (applyBtn) applyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (!currentReportType) return showAlert('Please select a report by clicking "View" on a report card first', 'error');
+        currentReportPage = 1;
+        loadReport();
+    });
+
+    if (clearBtn) clearBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const s = document.getElementById('reportSearch'); if (s) s.value = '';
+        const sf = document.getElementById('reportStateFilter'); if (sf) sf.value = '';
+        const df = document.getElementById('reportDateFrom'); if (df) df.value = '';
+        const dt = document.getElementById('reportDateTo'); if (dt) dt.value = '';
+        const ps = document.getElementById('reportPageSize'); if (ps) ps.value = '25';
+        currentReportPage = 1;
+        if (currentReportType) loadReport();
+    });
+
+    if (exExcel) exExcel.addEventListener('click', (e) => { e.preventDefault(); if (!currentReportType) return showAlert('Select a report first', 'error'); exportReport(currentReportType, 'excel'); });
+    if (exPdf) exPdf.addEventListener('click', (e) => { e.preventDefault(); if (!currentReportType) return showAlert('Select a report first', 'error'); exportReport(currentReportType, 'pdf'); });
+
+    if (searchInput) {
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (!currentReportType) return showAlert('Select a report first', 'error');
+                currentReportPage = 1; loadReport();
+            }
+        });
+    }
+});
+
 async function loadInitialData() {
     await fetchCurrentUser();
     if (!currentUser) {
@@ -718,7 +758,7 @@ async function loadStates() {
         states = statesData.map(s => typeof s === 'string' ? s : s.name).sort();
 
         // Populate state selects
-        const selects = ['stateSelect', 'filterState', 'deliveryStateSelect'];
+        const selects = ['stateSelect', 'filterState', 'deliveryStateSelect', 'reportStateFilter'];
         selects.forEach(selectId => {
             const select = document.getElementById(selectId);
             if (!select) return;
@@ -1339,17 +1379,32 @@ async function loadReminders() {
             return;
         }
 
-        // group by status
+        // group by status, deduplicate reminders for the same ARN within a status
         const groups = {};
         active.forEach(r => {
             const s = r.status || 'Unknown';
-            if (!groups[s]) groups[s] = [];
-            groups[s].push(r);
+            if (!groups[s]) groups[s] = {}; // use object keyed by ARN to dedupe
+            const key = String(r.arn || '').trim();
+            if (!key) return;
+            const existing = groups[s][key];
+            if (!existing) {
+                groups[s][key] = r;
+            } else {
+                // keep the most recently created reminder for this ARN
+                try {
+                    const a = new Date(r.created_at || 0).getTime();
+                    const b = new Date(existing.created_at || 0).getTime();
+                    if (a > b) groups[s][key] = r;
+                } catch (e) {
+                    // fallback: prefer existing (do nothing)
+                }
+            }
         });
 
         // create UI: ribbon per status with count and expandable list
         const html = Object.keys(groups).map(status => {
-            const items = groups[status];
+            const itemsObj = groups[status] || {};
+            const items = Object.keys(itemsObj).map(k => itemsObj[k]);
             const id = `rem-group-${status.replace(/\s+/g,'-')}`;
             return `
                 <div class="reminder-group">
@@ -1926,7 +1981,12 @@ window.receiveConfirmation = receiveConfirmation;
 
 async function loadDeliveryHistory() {
     try {
-        const response = await fetch(`${API_BASE}/reports/delivery-history`);
+        const response = await fetch(`${API_BASE}/reports/delivery-history`, { credentials: 'same-origin' });
+        if (!response.ok) {
+            const err = await response.json().catch(()=>({}));
+            console.warn('loadDeliveryHistory failed', err);
+            return;
+        }
         const history = await response.json();
 
         const container = document.getElementById('deliveryHistory');
@@ -1950,50 +2010,150 @@ async function loadDeliveryHistory() {
     }
 }
 
-async function viewReport(type) {
+// Reports: view and filtering (custom report UI)
+let currentReportType = null;
+let currentReportPage = 1;
+
+function viewReport(type) {
+    currentReportType = type;
+    currentReportPage = 1;
+    document.getElementById('reportView').style.display = 'block';
+    document.getElementById('reportTitle').textContent = `Report: ${type.replace(/-/g, ' ').toUpperCase()}`;
+    // populate state filter
+    const stateSelect = document.getElementById('reportStateFilter');
+    if (stateSelect) {
+        stateSelect.innerHTML = '<option value="">All States</option>';
+        states.forEach(s => {
+            const opt = document.createElement('option'); opt.value = s; opt.textContent = s; stateSelect.appendChild(opt);
+        });
+    }
+    // wire buttons
+    const applyBtn = document.getElementById('applyReportFilters');
+    if (applyBtn) applyBtn.onclick = () => { currentReportPage = 1; loadReport(); };
+    const clearBtn = document.getElementById('clearReportFilters');
+    if (clearBtn) clearBtn.onclick = () => {
+        const s = document.getElementById('reportSearch'); if (s) s.value = '';
+        const sf = document.getElementById('reportStateFilter'); if (sf) sf.value = '';
+        const df = document.getElementById('reportDateFrom'); if (df) df.value = '';
+        const dt = document.getElementById('reportDateTo'); if (dt) dt.value = '';
+        const ps = document.getElementById('reportPageSize'); if (ps) ps.value = '25';
+        currentReportPage = 1;
+        loadReport();
+    };
+
+    const exExcel = document.getElementById('exportReportExcel');
+    if (exExcel) exExcel.onclick = () => exportReport(currentReportType, 'excel');
+    const exPdf = document.getElementById('exportReportPdf');
+    if (exPdf) exPdf.onclick = () => exportReport(currentReportType, 'pdf');
+
+    loadReport();
+}
+
+async function loadReport() {
+    if (!currentReportType) return;
+    const searchEl = document.getElementById('reportSearch');
+    const stateEl = document.getElementById('reportStateFilter');
+    const dateFromEl = document.getElementById('reportDateFrom');
+    const dateToEl = document.getElementById('reportDateTo');
+    const pageSizeEl = document.getElementById('reportPageSize');
+
+    const search = searchEl ? searchEl.value : '';
+    const state = stateEl ? stateEl.value : '';
+    const dateFrom = dateFromEl ? dateFromEl.value : '';
+    const dateTo = dateToEl ? dateToEl.value : '';
+    const pageSize = Number(pageSizeEl ? pageSizeEl.value : 25) || 25;
+
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (state) params.append('state', state);
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+    params.append('page', String(currentReportPage));
+    params.append('page_size', String(pageSize));
+
     try {
-        const response = await fetch(`${API_BASE}/reports/${type}`);
-        const data = await response.json();
+        const response = await fetch(`${API_BASE}/reports/${currentReportType}?${params}`, { credentials: 'same-origin' });
+        if (!response.ok) {
+            const err = await response.json().catch(()=>({}));
+            return showAlert(err.error || 'Failed to load report (auth?)', 'error');
+        }
+        const rows = await response.json();
 
         const container = document.getElementById('reportContent');
-        const title = document.getElementById('reportTitle');
-
-        const titles = {
-            'pending-capture': 'Pending Capture (Aging)',
-            'submitted': 'Submitted to Personalization',
-            'pending-delivery': 'Pending Delivery by State',
-            'delivery-history': 'Delivery History',
-            'activity-log': 'Activity Log'
-        };
-
-        title.textContent = titles[type] || type;
-
-        if (data.length === 0) {
-            container.innerHTML = '<p class="info-text">No data available</p>';
-        } else {
-            const headers = Object.keys(data[0]);
-            container.innerHTML = `
-                <table class="report-table">
-                    <thead>
-                        <tr>${headers.map(h => `<th>${h.replace(/_/g, ' ').toUpperCase()}</th>`).join('')}</tr>
-                    </thead>
-                    <tbody>
-                        ${data.map(row => `
-                            <tr>${headers.map(h => `<td>${row[h] || ''}</td>`).join('')}</tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
+        if (!Array.isArray(rows) || rows.length === 0) {
+            container.innerHTML = '<p class="info-text">No results</p>';
+            return;
         }
+        // render table (use report-table so styles apply)
+        let html = '<div class="report-table-wrap"><table class="report-table"><thead><tr>';
+        const keys = Object.keys(rows[0]);
+        keys.forEach(k => { html += `<th>${k.replace(/_/g,' ')}</th>`; });
+        // additional column for confirmation note
+        html += `<th>Confirmation</th>`;
+        html += '</tr></thead><tbody>';
+        rows.forEach(r => {
+            html += '<tr>';
+            keys.forEach(k => { html += `<td>${r[k] !== null && r[k] !== undefined ? r[k] : ''}</td>`; });
+            // add a placeholder button that will query for a confirmation file
+            const arnVal = r.arn || r.ARN || '';
+            html += `<td><button class="btn btn-sm btn-outline-primary view-confirmation" data-arn="${arnVal}">View</button></td>`;
+            html += '</tr>';
+        });
+        html += '</tbody></table></div>';
 
-        document.getElementById('reportView').style.display = 'block';
+        // pagination controls (simple)
+        html += `<div style="margin-top:10px;"><button class="btn" id="prevPage">Prev</button> <span>Page ${currentReportPage}</span> <button class="btn" id="nextPage">Next</button></div>`;
+
+        container.innerHTML = html;
+        // Wire confirmation view buttons
+        Array.from(container.querySelectorAll('.view-confirmation')).forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const arn = btn.dataset.arn;
+                if (!arn) return showAlert('ARN not available for this row', 'error');
+                try {
+                    const res = await fetch(`${API_BASE}/arns/${encodeURIComponent(arn)}/confirmation`, { credentials: 'same-origin' });
+                    if (!res.ok) {
+                        const d = await res.json().catch(()=>({}));
+                        return showAlert(d.error || 'No confirmation file found', 'error');
+                    }
+                    const j = await res.json();
+                    if (j && j.url) {
+                        // Open the returned URL in a new tab (same-origin so cookies apply)
+                        window.open(j.url, '_blank');
+                    } else {
+                        showAlert('No file URL returned', 'error');
+                    }
+                } catch (err) {
+                    console.error('Error fetching confirmation:', err);
+                    showAlert('Failed to fetch confirmation', 'error');
+                }
+            });
+        });
+        const prev = document.getElementById('prevPage'); if (prev) prev.onclick = () => { if (currentReportPage>1) { currentReportPage--; loadReport(); } };
+        const next = document.getElementById('nextPage'); if (next) next.onclick = () => { currentReportPage++; loadReport(); };
+
     } catch (error) {
-        showAlert('Error loading report', 'error');
+        console.error('Error loading report:', error);
+        showAlert('Failed to load report', 'error');
     }
 }
 
-function exportReport(type, format) {
-    window.open(`${API_BASE}/export/${format}/${type}`, '_blank');
+async function exportReport(type, format) {
+    const searchEl = document.getElementById('reportSearch');
+    const stateEl = document.getElementById('reportStateFilter');
+    const dateFromEl = document.getElementById('reportDateFrom');
+    const dateToEl = document.getElementById('reportDateTo');
+    const search = searchEl ? searchEl.value : '';
+    const state = stateEl ? stateEl.value : '';
+    const dateFrom = dateFromEl ? dateFromEl.value : '';
+    const dateTo = dateToEl ? dateToEl.value : '';
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (state) params.append('state', state);
+    if (dateFrom) params.append('date_from', dateFrom);
+    if (dateTo) params.append('date_to', dateTo);
+    const url = `${API_BASE}/export/${format}/${type}?${params}`;
+    window.open(url, '_blank');
 }
 
 function formatDate(dateString) {
@@ -2230,103 +2390,7 @@ async function loadStatesList() {
     }
 }
 
-// Reports: view and filtering
-let currentReportType = null;
-let currentReportPage = 1;
 
-function viewReport(type) {
-    currentReportType = type;
-    currentReportPage = 1;
-    document.getElementById('reportView').style.display = 'block';
-    document.getElementById('reportTitle').textContent = `Report: ${type.replace(/-/g, ' ').toUpperCase()}`;
-    // populate state filter
-    const stateSelect = document.getElementById('reportStateFilter');
-    stateSelect.innerHTML = '<option value="">All States</option>';
-    states.forEach(s => {
-        const opt = document.createElement('option'); opt.value = s; opt.textContent = s; stateSelect.appendChild(opt);
-    });
-    // wire buttons
-    document.getElementById('applyReportFilters').onclick = () => { currentReportPage = 1; loadReport(); };
-    document.getElementById('clearReportFilters').onclick = () => {
-        document.getElementById('reportSearch').value = '';
-        document.getElementById('reportStateFilter').value = '';
-        document.getElementById('reportDateFrom').value = '';
-        document.getElementById('reportDateTo').value = '';
-        document.getElementById('reportPageSize').value = '25';
-        currentReportPage = 1;
-        loadReport();
-    };
-
-    document.getElementById('exportReportExcel').onclick = () => exportReport(currentReportType, 'excel');
-    document.getElementById('exportReportPdf').onclick = () => exportReport(currentReportType, 'pdf');
-
-    loadReport();
-}
-
-async function loadReport() {
-    if (!currentReportType) return;
-    const search = document.getElementById('reportSearch').value;
-    const state = document.getElementById('reportStateFilter').value;
-    const dateFrom = document.getElementById('reportDateFrom').value;
-    const dateTo = document.getElementById('reportDateTo').value;
-    const pageSize = Number(document.getElementById('reportPageSize').value || 25);
-
-    const params = new URLSearchParams();
-    if (search) params.append('search', search);
-    if (state) params.append('state', state);
-    if (dateFrom) params.append('date_from', dateFrom);
-    if (dateTo) params.append('date_to', dateTo);
-    params.append('page', String(currentReportPage));
-    params.append('page_size', String(pageSize));
-
-    try {
-        const response = await fetch(`${API_BASE}/reports/${currentReportType}?${params}`);
-        const rows = await response.json();
-
-        const container = document.getElementById('reportContent');
-        if (!Array.isArray(rows) || rows.length === 0) {
-            container.innerHTML = '<p class="info-text">No results</p>';
-            return;
-        }
-        // render table (use report-table so styles apply)
-        let html = '<div class="report-table-wrap"><table class="report-table"><thead><tr>';
-        const keys = Object.keys(rows[0]);
-        keys.forEach(k => { html += `<th>${k.replace(/_/g,' ')}</th>`; });
-        html += '</tr></thead><tbody>';
-        rows.forEach(r => {
-            html += '<tr>';
-            keys.forEach(k => { html += `<td>${r[k] !== null ? r[k] : ''}</td>`; });
-            html += '</tr>';
-        });
-        html += '</tbody></table></div>';
-
-        // pagination controls (simple)
-        html += `<div style="margin-top:10px;"><button class="btn" id="prevPage">Prev</button> <span>Page ${currentReportPage}</span> <button class="btn" id="nextPage">Next</button></div>`;
-
-        container.innerHTML = html;
-        document.getElementById('prevPage').onclick = () => { if (currentReportPage>1) { currentReportPage--; loadReport(); } };
-        document.getElementById('nextPage').onclick = () => { currentReportPage++; loadReport(); };
-
-    } catch (error) {
-        console.error('Error loading report:', error);
-        showAlert('Failed to load report', 'error');
-    }
-}
-
-async function exportReport(type, format) {
-    const search = document.getElementById('reportSearch').value;
-    const state = document.getElementById('reportStateFilter').value;
-    const dateFrom = document.getElementById('reportDateFrom').value;
-    const dateTo = document.getElementById('reportDateTo').value;
-    const params = new URLSearchParams();
-    if (search) params.append('search', search);
-    if (state) params.append('state', state);
-    if (dateFrom) params.append('date_from', dateFrom);
-    if (dateTo) params.append('date_to', dateTo);
-
-    const url = `${API_BASE}/export/${format}/${type}?${params}`;
-    window.open(url, '_blank');
-}
 
 async function deleteState(id, stateName) {
     if (!confirm(`Are you sure you want to delete the state "${stateName}"?`)) {

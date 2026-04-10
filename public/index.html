@@ -393,18 +393,23 @@
 
                         <div class="section">
                             <h3>Custom Report</h3>
-                            <div style="display:flex;gap:8px;margin-bottom:10px;">
-                                <input type="date" id="reportStartDate" placeholder="Start date">
-                                <input type="date" id="reportEndDate" placeholder="End date">
-                                <select id="reportFilterType">
-                                    <option value="">All Types</option>
-                                    <option value="arn">ARN Status</option>
-                                    <option value="state">State Delivery</option>
-                                </select>
-                                <button id="exportReportExcel" class="btn btn-secondary">Excel</button>
-                                <button id="exportReportPdf" class="btn btn-secondary">PDF</button>
+                            <div id="reportView" style="display:block;">
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
+                                    <input type="text" id="reportSearch" placeholder="Search..." class="filter-input">
+                                    <select id="reportStateFilter" class="filter-select"><option value="">All States</option></select>
+                                    <input type="date" id="reportDateFrom" placeholder="Start date">
+                                    <input type="date" id="reportDateTo" placeholder="End date">
+                                    <select id="reportPageSize" class="filter-select"><option value="10">10</option><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select>
+                                    <button id="applyReportFilters" class="btn btn-primary">Apply</button>
+                                    <button id="clearReportFilters" class="btn">Clear</button>
+                                    <div style="margin-left:auto;display:flex;gap:8px;">
+                                        <button id="exportReportExcel" class="btn btn-secondary">Excel</button>
+                                        <button id="exportReportPdf" class="btn btn-secondary">PDF</button>
+                                    </div>
+                                </div>
+                                <h4 id="reportTitle" style="margin-bottom:8px;">Report</h4>
+                                <div id="reportContent" class="report-content"></div>
                             </div>
-                            <div id="reportContent" class="report-content"></div>
                         </div>
                     </div>
                 </div>

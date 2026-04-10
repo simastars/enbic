@@ -680,8 +680,8 @@ app.get('/api/arns', (req, res) => {
     params.push(status);
   }
   if (search) {
-    query += ' AND arn LIKE ?';
-    params.push(`%${search}%`);
+    query += ' AND (arn LIKE ? OR name LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`);
   }
 
   query += ' ORDER BY created_at DESC';
@@ -2241,6 +2241,47 @@ app.post('/api/dispatch/:batchId/confirmation', requireRole(['operator','admin',
     });
   });
 
+// Given an ARN, attempt to locate a confirmation/delivery file and return a URL to fetch it
+app.get('/api/arns/:arn/confirmation', requireLogin, (req, res) => {
+  const arn = req.params.arn;
+  // 1) check dispatch_batches where batch_arn = arn
+  db.get(`SELECT batch_id, confirmation_note_path FROM dispatch_batches WHERE batch_arn = ? AND confirmation_note_path IS NOT NULL ORDER BY delivered_at DESC LIMIT 1`, [arn], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (row && row.confirmation_note_path) {
+      return res.json({ url: `/api/dispatch/${row.batch_id}/file/confirmation` });
+    }
+
+    // 2) check dispatch_batches where arns_json contains the arn
+    db.get(`SELECT batch_id, confirmation_note_path FROM dispatch_batches WHERE arns_json LIKE ? AND confirmation_note_path IS NOT NULL ORDER BY delivered_at DESC LIMIT 1`, [`%${arn}%`], (err2, row2) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      if (row2 && row2.confirmation_note_path) {
+        return res.json({ url: `/api/dispatch/${row2.batch_id}/file/confirmation` });
+      }
+
+      // 3) check arns.delivery_note_path for a per-ARN file
+      db.get(`SELECT delivery_note_path FROM arns WHERE arn = ?`, [arn], (err3, r3) => {
+        if (err3) return res.status(500).json({ error: err3.message });
+        if (r3 && r3.delivery_note_path) {
+          // provide a URL to fetch the ARN file
+          return res.json({ url: `/api/arns/${encodeURIComponent(arn)}/file` });
+        }
+
+        return res.status(404).json({ error: 'No confirmation or delivery file found for this ARN' });
+      });
+    });
+  });
+});
+
+// Serve per-ARN delivery file if present
+app.get('/api/arns/:arn/file', requireLogin, (req, res) => {
+  const arn = req.params.arn;
+  db.get(`SELECT delivery_note_path FROM arns WHERE arn = ?`, [arn], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row || !row.delivery_note_path) return res.status(404).json({ error: 'File not found' });
+    res.sendFile(row.delivery_note_path);
+  });
+});
+
   // Generate delivery note for a single ARN (server-side) and save file
   app.post('/api/arns/:arn/generate-note', requireRole(['operator','admin']), (req, res) => {
     const arnParam = req.params.arn;
@@ -2425,7 +2466,7 @@ app.get('/api/reports/:type', requireRole(['operator','admin','supervisor']), (r
   switch (type) {
     case 'pending-capture':
       query = `SELECT *, julianday('now') - julianday(created_at) as age_days FROM arns WHERE status = 'Awaiting Capture'`;
-      if (search) { query += ' AND arn LIKE ?'; params.push(`%${search}%`); }
+      if (search) { query += ' AND (arn LIKE ? OR name LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
       if (state) { query += ' AND state = ?'; params.push(state); }
       if (date_from) { query += ' AND date(created_at) >= date(?)'; params.push(date_from); }
       if (date_to) { query += ' AND date(created_at) <= date(?)'; params.push(date_to); }
@@ -2433,7 +2474,7 @@ app.get('/api/reports/:type', requireRole(['operator','admin','supervisor']), (r
       break;
     case 'submitted':
       query = `SELECT * FROM arns WHERE status = 'Submitted to Personalization'`;
-      if (search) { query += ' AND arn LIKE ?'; params.push(`%${search}%`); }
+      if (search) { query += ' AND (arn LIKE ? OR name LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
       if (state) { query += ' AND state = ?'; params.push(state); }
       if (date_from) { query += ' AND date(submitted_at) >= date(?)'; params.push(date_from); }
       if (date_to) { query += ' AND date(submitted_at) <= date(?)'; params.push(date_to); }
@@ -2441,11 +2482,19 @@ app.get('/api/reports/:type', requireRole(['operator','admin','supervisor']), (r
       break;
     case 'pending-delivery':
       query = `SELECT *, julianday('now') - julianday(pending_delivery_at) as age_days FROM arns WHERE status = 'Pending Delivery'`;
-      if (search) { query += ' AND arn LIKE ?'; params.push(`%${search}%`); }
+      if (search) { query += ' AND (arn LIKE ? OR name LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
       if (state) { query += ' AND state = ?'; params.push(state); }
       if (date_from) { query += ' AND date(pending_delivery_at) >= date(?)'; params.push(date_from); }
       if (date_to) { query += ' AND date(pending_delivery_at) <= date(?)'; params.push(date_to); }
       query += ` ORDER BY state, pending_delivery_at ASC LIMIT ${limit} OFFSET ${offset}`;
+      break;
+    case 'delivered':
+      query = `SELECT * FROM arns WHERE status = 'Delivered'`;
+      if (search) { query += ' AND (arn LIKE ? OR name LIKE ?)'; params.push(`%${search}%`, `%${search}%`); }
+      if (state) { query += ' AND state = ?'; params.push(state); }
+      if (date_from) { query += ' AND date(delivered_at) >= date(?)'; params.push(date_from); }
+      if (date_to) { query += ' AND date(delivered_at) <= date(?)'; params.push(date_to); }
+      query += ` ORDER BY delivered_at DESC LIMIT ${limit} OFFSET ${offset}`;
       break;
     case 'delivery-history':
       query = `SELECT * FROM delivery_history WHERE 1=1`;
@@ -2488,6 +2537,7 @@ app.get('/api/export/excel/:type', requireRole(['operator','admin','supervisor']
       'pending-delivery': `SELECT *, 
         julianday('now') - julianday(pending_delivery_at) as age_days
         FROM arns WHERE status = 'Pending Delivery' ORDER BY state, pending_delivery_at ASC`,
+      'delivered': `SELECT * FROM arns WHERE status = 'Delivered' ORDER BY delivered_at DESC`,
       'all': `SELECT * FROM arns ORDER BY created_at DESC`
     }[type] || `SELECT * FROM arns ORDER BY created_at DESC`;
 
@@ -2523,11 +2573,15 @@ app.get('/api/export/excel/:type', requireRole(['operator','admin','supervisor']
 app.get('/api/export/pdf/:type', requireRole(['operator','admin','supervisor']), (req, res) => {
   const { type } = req.params;
   
-  db.all(`SELECT * FROM arns WHERE status = ?`, 
-    type === 'pending-capture' ? ['Awaiting Capture'] :
-    type === 'submitted' ? ['Submitted to Personalization'] :
-    type === 'pending-delivery' ? ['Pending Delivery'] : ['%'],
-    (err, rows) => {
+  // Build SQL for PDF export based on requested type
+  let pdfSql = '';
+  if (type === 'pending-capture') pdfSql = `SELECT *, julianday('now') - julianday(created_at) as age_days FROM arns WHERE status = 'Awaiting Capture' ORDER BY created_at ASC`;
+  else if (type === 'submitted') pdfSql = `SELECT * FROM arns WHERE status = 'Submitted to Personalization' ORDER BY submitted_at DESC`;
+  else if (type === 'pending-delivery') pdfSql = `SELECT *, julianday('now') - julianday(pending_delivery_at) as age_days FROM arns WHERE status = 'Pending Delivery' ORDER BY state, pending_delivery_at ASC`;
+  else if (type === 'delivered') pdfSql = `SELECT * FROM arns WHERE status = 'Delivered' ORDER BY delivered_at DESC`;
+  else pdfSql = `SELECT * FROM arns ORDER BY created_at DESC`;
+
+  db.all(pdfSql, [], (err, rows) => {
       if (err) {
         return res.status(500).json({ error: err.message });
       }
@@ -2536,28 +2590,92 @@ app.get('/api/export/pdf/:type', requireRole(['operator','admin','supervisor']),
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename=enbic_report_${type}_${moment().format('YYYY-MM-DD')}.pdf`);
       
-      try {
-        doc.pipe(res);
-        doc.fontSize(20).text('ENBIC Report', { align: 'center' });
-        doc.moveDown();
-        doc.fontSize(12).text(`Report Type: ${type}`, { align: 'center' });
-        doc.text(`Generated: ${moment().format('YYYY-MM-DD HH:mm:ss')}`, { align: 'center' });
-        doc.moveDown();
+        try {
+          doc.pipe(res);
 
-        if (rows.length === 0) {
-          doc.text('No records found.');
-        } else {
-          doc.fontSize(10);
-          rows.forEach((row, index) => {
-            doc.text(`${index + 1}. ARN: ${row.arn} | State: ${row.state} | Status: ${row.status}`);
-            doc.moveDown(0.5);
+          // Page layout
+          const margin = 48;
+          const pageWidth = doc.page.width;
+          const usableWidth = pageWidth - margin * 2;
+          const startX = margin;
+          let cursorY = 60;
+
+          // Header
+          doc.font('Helvetica-Bold').fontSize(18).fillColor('#1f3a57').text('ENBIC Local Tracking System', startX, 28, { align: 'center', width: usableWidth });
+          doc.fontSize(10).fillColor('#555').text(`Report: ${type}`, startX, 46, { align: 'center', width: usableWidth });
+          doc.text(`Generated: ${moment().format('YYYY-MM-DD HH:mm:ss')}`, startX, 58, { align: 'center', width: usableWidth });
+
+          doc.moveTo(margin, cursorY - 8).lineTo(pageWidth - margin, cursorY - 8).strokeColor('#e0e0e0').stroke();
+
+          // Decide columns to show (prefer common fields)
+          const keys = rows.length > 0 ? Object.keys(rows[0]) : [];
+          const preferred = ['arn', 'name', 'state', 'document_number', 'status', 'created_at', 'delivered_at'];
+          const cols = preferred.filter(k => keys.includes(k));
+          if (cols.length === 0 && keys.length > 0) cols.push(...keys.slice(0, 5));
+
+          // Column widths (relative)
+          const relWidths = {
+            arn: 0.18,
+            name: 0.26,
+            state: 0.12,
+            document_number: 0.14,
+            status: 0.12,
+            created_at: 0.14,
+            delivered_at: 0.14
+          };
+
+          const colWidths = cols.map(k => Math.max(60, Math.floor((relWidths[k] || (1 / cols.length)) * usableWidth)));
+
+          const rowHeight = 22;
+
+          // Table header
+          let x = startX;
+          doc.font('Helvetica-Bold').fontSize(11).fillColor('#ffffff');
+          // header background
+          doc.rect(startX - 6, cursorY - 6, usableWidth + 12, rowHeight + 8).fill('#2c3e50');
+          x = startX;
+          for (let i = 0; i < cols.length; i++) {
+            const label = cols[i].replace(/_/g, ' ').toUpperCase();
+            doc.fillColor('#ffffff').text(label, x + 4, cursorY, { width: colWidths[i] - 8, align: 'left' });
+            x += colWidths[i];
+          }
+          cursorY += rowHeight + 4;
+
+          // Rows
+          rows.forEach((row, idx) => {
+            // page break if needed
+            if (cursorY + rowHeight > doc.page.height - margin) {
+              doc.addPage();
+              cursorY = margin;
+            }
+
+            // alternating background
+            if (idx % 2 === 0) {
+              doc.rect(startX - 6, cursorY - 4, usableWidth + 12, rowHeight + 6).fill('#f7f9fb');
+            }
+
+            // row text
+            x = startX;
+            doc.font('Helvetica').fontSize(10).fillColor('#222');
+            for (let i = 0; i < cols.length; i++) {
+              const k = cols[i];
+              let v = row[k] === null || row[k] === undefined ? '' : String(row[k]);
+              // format dates
+              if ((k === 'created_at' || k === 'delivered_at' || k === 'submitted_at' || k === 'pending_delivery_at') && v) {
+                v = moment(v).format('YYYY-MM-DD');
+              }
+              doc.fillColor('#222').text(v, x + 4, cursorY, { width: colWidths[i] - 8, align: 'left' });
+              x += colWidths[i];
+            }
+
+            cursorY += rowHeight + 4;
           });
-        }
 
-        doc.end();
-      } catch (pdfErr) {
-        console.error('Error generating PDF report:', pdfErr);
-        if (!res.headersSent) {
+          // finish
+          doc.end();
+        } catch (pdfErr) {
+          console.error('Error generating PDF report:', pdfErr);
+          if (!res.headersSent) {
           res.status(500).json({ error: 'Failed to generate PDF report' });
         }
       }
